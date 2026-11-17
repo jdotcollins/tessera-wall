@@ -1,12 +1,14 @@
 """Pure layout maths for tesserawall. No tkinter, no mpv, no I/O.
 
-DONE AND TESTED (see test_layout.py). Do not rewrite; import from it.
+Tested by test_layout.py, including the fast search against the exact one on random walls.
 
 Model: videos keep their given order and are split into contiguous ROWS.
-Every row spans the full width; row heights sum to the full height.
+Every row spans the full width; row heights sum to the full height. Up to EXACT_UP_TO videos every
+possible split is scored; above that a fast search is used (see _best_fast).
 """
 from __future__ import annotations
 
+import functools
 import math
 from dataclasses import dataclass
 
@@ -81,27 +83,122 @@ def arrange(aspects: list[float], W: int, H: int, max_crop: float = 0.10, balanc
     return best[1], best[2], best[3]
 
 
+EXACT_UP_TO = 12   # every possible split is tried up to this many videos (2^(n-1) splits: 2048 at 12)
+
+
+def _prefix(aspects):
+    p = [0.0]
+    for a in aspects:
+        p.append(p[-1] + a)
+    return p
+
+
+def _score(aspects, rows, W, H, free, balance_weight, prefix=None) -> float:
+    """How good a split into rows is; lower is better. Shared by the exact and the fast search.
+
+    Works from running totals, so one split costs O(rows) rather than O(videos)."""
+    prefix = prefix or _prefix(aspects)
+    n = len(aspects)
+    i = 0
+    total_h = sum_l = sum_l2 = 0.0
+    for k in rows:
+        h = W / (prefix[i + k] - prefix[i])   # height at which this row is exactly W wide
+        i += k
+        total_h += h
+        lh = math.log(h)
+        sum_l += k * lh                        # every video in the row shares its height
+        sum_l2 += k * lh * lh
+    mean = sum_l / n
+    spread = math.sqrt(max(0.0, sum_l2 / n - mean * mean))
+    misfit = abs(math.log(H / total_h))       # 0 means a perfect fit with no crop and no bars
+    # Misfit that the crop budget can hide is nearly free; only the excess shows as bars.
+    return max(0.0, misfit - free) + 0.1 * misfit + balance_weight * spread
+
+
 def _best(aspects, W, H, max_crop, balance_weight) -> tuple[float, list[int]]:
+    score, rows = _best_cached(tuple(aspects), W, H, max_crop, balance_weight)
+    return score, list(rows)
+
+
+@functools.lru_cache(maxsize=256)
+def _best_cached(aspects, W, H, max_crop, balance_weight) -> tuple[float, tuple]:
     n = len(aspects)
     if n == 0:
-        return 0.0, []
+        return 0.0, ()
     free = -math.log(1 - min(max(max_crop, 0.0), 0.9))
-    best_score, best_rows = None, None
-    for rows in _partitions(n):
-        heights, i = [], 0
-        for k in rows:
-            heights.append(W / sum(aspects[i:i + k]))  # height at which this row is exactly W wide
-            i += k
-        stretch = H / sum(heights)  # 1.0 means a perfect fit with no crop and no bars
-        logs = [math.log(h) for h, k in zip(heights, rows) for _ in range(k)]
-        mean = sum(logs) / n
-        spread = math.sqrt(sum((v - mean) ** 2 for v in logs) / n)
-        misfit = abs(math.log(stretch))
-        # Misfit that the crop budget can hide is nearly free; only the excess shows as bars.
-        score = max(0.0, misfit - free) + 0.1 * misfit + balance_weight * spread
-        if best_score is None or score < best_score - 1e-9:
-            best_score, best_rows = score, rows
-    return best_score, best_rows
+    if n <= EXACT_UP_TO:
+        prefix = _prefix(aspects)
+        best_score, best_rows = None, None
+        for rows in _partitions(n):
+            score = _score(aspects, rows, W, H, free, balance_weight, prefix)
+            if best_score is None or score < best_score - 1e-9:
+                best_score, best_rows = score, rows
+        return best_score, tuple(best_rows)
+    score, rows = _best_fast(aspects, W, H, free, balance_weight)
+    return score, tuple(rows)
+
+
+def _best_fast(aspects, W, H, free, balance_weight) -> tuple[float, list[int]]:
+    """Near-optimal split for many videos, in roughly O(n^2) instead of O(2^n).
+
+    A row's height is W / (sum of its aspect ratios), so rows of equal height are rows with equal
+    aspect sums. For each row count k: cut where the running aspect sum crosses each multiple of
+    total/k, then move single cuts left or right while that lowers the score.
+    """
+    n = len(aspects)
+    prefix = _prefix(aspects)
+    total = prefix[-1]
+
+    def to_rows(cs):
+        return [b - a for a, b in zip([0] + list(cs), list(cs) + [n])]
+
+    def score_of(cs):
+        return _score(aspects, to_rows(cs), W, H, free, balance_weight, prefix)
+
+    def valid(cs):
+        return all(a < b for a, b in zip([0] + list(cs), list(cs) + [n]))
+
+    def polish(cuts):
+        """Move cuts while that lowers the score: one cut by 1 or 2, or two neighbours together."""
+        score = score_of(cuts)
+        moves = [(c, d) for c in range(len(cuts)) for d in (-2, -1, 1, 2)]
+        moves += [((c, c + 1), d) for c in range(len(cuts) - 1) for d in (-1, 1)]
+        improved = True
+        while improved:
+            improved = False
+            for which, d in moves:
+                moved = list(cuts)
+                for c in (which if isinstance(which, tuple) else (which,)):
+                    moved[c] += d
+                if valid(moved):
+                    s = score_of(moved)
+                    if s < score - 1e-9:
+                        cuts, score, improved = moved, s, True
+        return score, cuts
+
+    best = (None, None)
+    for k in range(1, min(n, 14) + 1):
+        starts = set()
+        for pick in (min, max, None):                    # nearest, and either side of, r/k of the width
+            cuts, last = [], 0
+            for r in range(1, k):
+                goal = total * r / k
+                options = range(last + 1, n - (k - r) + 1)
+                if pick is None:
+                    j = min(options, key=lambda j: abs(prefix[j] - goal))
+                elif pick is min:
+                    j = max([j for j in options if prefix[j] <= goal] or [options[0]])
+                else:
+                    j = min([j for j in options if prefix[j] >= goal] or [options[-1]])
+                cuts.append(j)
+                last = j
+            if valid(cuts):
+                starts.add(tuple(cuts))
+        for start in starts:
+            score, cuts = polish(list(start))
+            if best[0] is None or score < best[0] - 1e-9:
+                best = (score, to_rows(cuts))
+    return best
 
 
 def layout(aspects: list[float], rows: list[int], W: int, H: int, focus: int | None = None,

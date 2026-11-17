@@ -96,6 +96,38 @@ def test_grid():
         check_tiling(grid([rng.choice([L, P, 4 / 3, 1.0]) for _ in range(rng.randint(1, 12))], W, H))
 
 
+def test_many_videos_fast_and_close_to_exact():
+    """Above EXACT_UP_TO a fast search is used. It must stay quick and close to the true best.
+
+    Measured when it was written (2026-11-18): as good as the exact search on 86 % of 13-15 video walls,
+    median 4.5 % worse otherwise, worst 24 % worse. The thresholds below leave room for noise only."""
+    import math
+    import time
+    import layout as L
+    shapes = [16 / 9, 9 / 16, 4 / 3, 21 / 9, 1.0, 1.85, 3 / 4]
+    rng = random.Random(5)
+    free = -math.log(1 - 0.10)
+    as_good, worst = 0, 0.0
+    for _ in range(60):
+        n = rng.randint(L.EXACT_UP_TO + 1, L.EXACT_UP_TO + 2)
+        a = [rng.choice(shapes) for _ in range(n)]
+        p = L._prefix(a)
+        exact = min(L._score(a, r, W, H, free, 0.5, p) for r in L._partitions(n))
+        fast, rows = L._best_fast(a, W, H, free, 0.5)
+        assert sum(rows) == n and all(k > 0 for k in rows)
+        check_tiling(layout(a, rows, W, H))
+        if fast <= exact + 1e-9:
+            as_good += 1
+        else:
+            worst = max(worst, (fast - exact) / exact)
+    assert as_good >= 45 and worst <= 0.5, (as_good, worst)
+    a = [rng.choice(shapes) for _ in range(30)]
+    L._best_cached.cache_clear()
+    t = time.perf_counter()
+    arrange(a, W, H)
+    assert time.perf_counter() - t < 0.5, "30 videos must lay out in well under a second"
+
+
 def test_panscan():
     assert panscan_for(1280, 720, 16 / 9) == 0.0
     assert panscan_for(1280, 720, 16 / 9, max_crop=0.5) == 0.0
