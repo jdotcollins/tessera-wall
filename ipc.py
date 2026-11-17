@@ -19,13 +19,26 @@ from __future__ import annotations
 import _winapi
 import itertools
 import json
+import queue
 import threading
 import time
 from multiprocessing.connection import PipeConnection
 
 
 class MpvIpc:
-    def __init__(self, pipe: str, timeout: float = 10.0):
+    """Two ways to talk to mpv:
+
+    - Ask and wait: get(), set(), command(). Simple, but they block the caller until mpv answers
+      (up to the timeout). Fine for tests and for quitting; never use them on the UI thread.
+    - Never wait: post() / set_async() put the command on a queue that a background writer thread
+      sends, and observe() asks mpv to push every change of a property, which the reader thread
+      keeps in value(). A frozen or slow player then cannot stall the caller at all.
+
+    Every message mpv sends gets an increasing sequence number, so callers can tell whether a
+    property changed after an event (event_seq / value_seq), e.g. "is this size from the new file?".
+    """
+
+    def __init__(self, pipe: str, timeout: float = 10.0, handshake: bool = True):
         deadline = time.monotonic() + timeout
         while True:
             try:
@@ -41,9 +54,19 @@ class MpvIpc:
         self._ids = itertools.count(1)
         self._pending: dict[int, tuple[threading.Event, list]] = {}
         self._write_lock = threading.Lock()
+        self._outbox: queue.Queue = queue.Queue(maxsize=512)
+        self._seq = 0
+        self._values: dict[str, tuple[object, int]] = {}   # property -> (latest value, seq)
+        self._events: dict[str, tuple[int, int]] = {}      # event name -> (how many, seq of the last)
+        self._observe_ids = itertools.count(1)
+        self.dropped = 0                                    # posts thrown away because mpv stopped reading
         self.alive = True
         threading.Thread(target=self._reader, daemon=True).start()
-        self._handshake()
+        threading.Thread(target=self._writer, daemon=True).start()
+        if handshake:
+            self._handshake()
+        else:
+            self.post("client_name")   # a harmless first message: if mpv drops it, nothing is lost
 
     def _handshake(self, attempts: int = 4, timeout: float = 0.25):
         """Get one reply before any real command is sent.
@@ -67,15 +90,39 @@ class MpvIpc:
                     if not line.strip():
                         continue
                     msg = json.loads(line)
-                    entry = self._pending.pop(msg.get("request_id"), None)
-                    if entry and "event" not in msg:
-                        entry[1].append(msg)
-                        entry[0].set()
+                    self._seq += 1
+                    event = msg.get("event")
+                    if event == "property-change":
+                        self._values[msg.get("name")] = (msg.get("data"), self._seq)
+                    elif event:
+                        count, _ = self._events.get(event, (0, 0))
+                        self._events[event] = (count + 1, self._seq)
+                    else:
+                        entry = self._pending.pop(msg.get("request_id"), None)
+                        if entry:
+                            entry[1].append(msg)
+                            entry[0].set()
         except (EOFError, OSError, ValueError):
             pass
         self.alive = False
         for ev, _ in list(self._pending.values()):
             ev.set()
+        try:
+            self._outbox.put_nowait(None)   # wake the writer so it can finish
+        except queue.Full:
+            pass
+
+    def _writer(self):
+        while True:
+            data = self._outbox.get()
+            if data is None or not self.alive:
+                return
+            try:
+                with self._write_lock:
+                    self._conn.send_bytes(data)
+            except (OSError, ValueError):
+                self.alive = False
+                return
 
     def command(self, *args, timeout: float = 2.0):
         """Send a command and wait for mpv's reply. Returns the reply's 'data' (may be None).
@@ -103,17 +150,41 @@ class MpvIpc:
         return reply.get("data") if reply.get("error") == "success" else None
 
     def post(self, *args) -> None:
-        """Send a command WITHOUT waiting for the reply. Use for state changes from the UI thread:
-        mpv acknowledges some properties (brightness, vd-lavc-skipframe) only on the next video frame,
-        which is 16-70 ms per call and adds up across players. Order on one pipe is preserved."""
+        """Send a command WITHOUT waiting, not even for the write. Use from the UI thread.
+
+        The command is queued and sent by the writer thread, in order. If mpv has stopped reading
+        (frozen) and the queue is full, the command is dropped and counted in `dropped` rather than
+        blocking: a frozen player must never freeze the wall."""
         if not self.alive:
             return
+        payload = args[0] if len(args) == 1 and isinstance(args[0], dict) else list(args)
         try:
-            payload = args[0] if len(args) == 1 and isinstance(args[0], dict) else list(args)
-            with self._write_lock:
-                self._conn.send_bytes(json.dumps({"command": payload}).encode() + b"\n")
-        except (OSError, ValueError):
-            self.alive = False
+            self._outbox.put_nowait(json.dumps({"command": payload}).encode() + b"\n")
+        except queue.Full:
+            self.dropped += 1
+
+    def observe(self, *props: str) -> None:
+        """Ask mpv to push the current value of each property now and on every change."""
+        for p in props:
+            self.post("observe_property", next(self._observe_ids), p)
+
+    def value(self, prop: str, default=None):
+        """Latest pushed value of an observed property (never waits). None/default until known."""
+        v = self._values.get(prop, (None, 0))[0]
+        return default if v is None else v
+
+    def value_seq(self, prop: str) -> int:
+        """Sequence number of the last change of an observed property (0 = none yet)."""
+        return self._values.get(prop, (None, 0))[1]
+
+    def event_seq(self, event: str) -> int:
+        """Sequence number of the last occurrence of an mpv event such as "file-loaded" (0 = none)."""
+        return self._events.get(event, (0, 0))[1]
+
+    @property
+    def seq(self) -> int:
+        """Sequence number of the latest message received; anything later is newer than now."""
+        return self._seq
 
     def set_async(self, prop: str, value) -> None:
         self.post("set_property", prop, value)
@@ -126,6 +197,10 @@ class MpvIpc:
 
     def close(self):
         self.alive = False
+        try:
+            self._outbox.put_nowait(None)
+        except queue.Full:
+            pass
         try:
             self._conn.close()
         except OSError:

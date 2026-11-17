@@ -96,6 +96,7 @@ class Tile:
     gain: float = 0.0            # crossfade position: 0 = silent and muted, 1 = full volume
     idle_since: float | None = None   # when mpv was first seen idle (file failed to open)
     swapped: bool = False        # file was replaced with `n`; wait for mpv to report the new one
+    swap_seq: int = 0            # ipc.seq when the replacement was requested; only newer news counts
 
 
 def fmt_time(s: float) -> str:
@@ -491,6 +492,7 @@ class Wall:
 
     def load_into(self, t: Tile, new: str):
         log.info("file swapped: %s -> %s", t.path, new)
+        t.swap_seq = t.ipc.seq
         t.ipc.post("loadfile", new, "replace")
         t.ipc.post("show-text", os.path.basename(new), 2500)
         t.path, t.swapped, t.aspect_known, t.born = new, True, False, time.monotonic()
@@ -711,7 +713,7 @@ class Wall:
         if not t or not t.ipc or not t.target or now < self.bar_next:
             return
         self.bar_next = now + 0.25
-        pct, pos, dur = t.ipc.get("percent-pos"), t.ipc.get("time-pos"), t.ipc.get("duration")
+        pct, pos, dur = t.ipc.value("percent-pos"), t.ipc.value("time-pos"), t.ipc.value("duration")
         if pct is None:
             return
         w, h, bh = t.target.w, t.target.h, C.SEEKBAR_HEIGHT
@@ -758,7 +760,7 @@ class Wall:
             return
         items = []
         for t in self.tiles:
-            pos = t.ipc.get("time-pos") if t.ipc else None
+            pos = t.ipc.value("time-pos") if t.ipc else None
             items.append({"path": t.path, "pos": round(pos or 0, 1)})
         if not items:
             return
@@ -782,7 +784,11 @@ class Wall:
                 self.remove(t, f"mpv exited with {t.proc.returncode}")
             elif t.ipc is None:
                 try:
-                    t.ipc = MpvIpc(t.pipe, timeout=0)
+                    # Never block the UI thread on a player: no waiting handshake, and the values the
+                    # wall needs are pushed by mpv instead of asked for (see ipc.MpvIpc).
+                    t.ipc = MpvIpc(t.pipe, timeout=0, handshake=False)
+                    t.ipc.observe("idle-active", "dwidth", "dheight", "video-params", "percent-pos",
+                                  "time-pos", "duration", "pause")
                     self.need_layout = True  # so panscan gets sent
                     if not self.hint_shown and (self.notice or C.SHOW_HELP_HINT):
                         self.hint_shown = True   # a startup problem with the settings file wins over the hint
@@ -794,7 +800,7 @@ class Wall:
                 # A file mpv cannot open leaves the player idle with an empty window (it does not exit,
                 # because of --force-window). Seen twice, 0.6 s apart, so a brief idle moment while a
                 # file is still being opened is not mistaken for a failure.
-                if t.ipc.get("idle-active"):
+                if t.ipc.value("idle-active"):
                     if t.idle_since is None:
                         t.idle_since = now
                     elif now - t.idle_since > 0.6:
@@ -802,11 +808,17 @@ class Wall:
                         self.remove(t, "mpv could not open the file")
                     continue
                 t.idle_since = None
-                if t.swapped and t.ipc.get("path") != t.path:
-                    continue  # mpv is still showing the previous file; its size would be wrong
-                w, h = t.ipc.get("dwidth"), t.ipc.get("dheight")
+                if t.swapped:
+                    # After a swap mpv reports the new file's name before its size: the size only
+                    # counts once the new file has loaded AND a size (or video change) came after that.
+                    loaded = t.ipc.event_seq("file-loaded")
+                    if loaded <= t.swap_seq:
+                        continue
+                    if max(t.ipc.value_seq("dwidth"), t.ipc.event_seq("video-reconfig")) <= loaded:
+                        continue
+                w, h = t.ipc.value("dwidth"), t.ipc.value("dheight")
                 if w and h:
-                    rot = t.ipc.get("video-params/rotate") or 0
+                    rot = (t.ipc.value("video-params") or {}).get("rotate") or 0
                     t.aspect = h / w if rot in (90, 270) else w / h
                     t.aspect_known = True
                     self.need_layout = True
@@ -866,7 +878,7 @@ class Wall:
         ref = self.focus or (self.tiles[0] if self.tiles else None)
         if not ref or not ref.ipc:
             return
-        state = not ref.ipc.get("pause")
+        state = not ref.ipc.value("pause", False)
         for t in self.tiles:
             if t.ipc:
                 t.ipc.set_async("pause", state)
