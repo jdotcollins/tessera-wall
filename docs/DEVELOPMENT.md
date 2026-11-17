@@ -175,10 +175,27 @@ folder on the development PC still has the old name; nothing depends on it.
   tests). The same path covers `n` / Page Down landing on a broken file.
 - Icon: `tools/make_icon.py` draws it with the standard library only and writes `tesserawall.ico` (exe,
   shortcuts, installer) and `tesserawall.png`; both are committed. `set_icon()` loads them from `app_dir()`.
-- Controls list: `Wall.toggle_help` builds a borderless always-on-top `tk.Toplevel` from the `HELP`
-  table at the top of `tesserawall.pyw`. **When a key or gesture changes, update `HELP` and the README.**
+- Controls list: `Wall.toggle_help` builds a borderless always-on-top `tk.Toplevel` from the
+  `HELP_SECTIONS` table (laid out in two columns by `HELP_COLUMNS`) at the top of `tesserawall.pyw`; key
+  names become key chips. **When a key or gesture changes, update `HELP_SECTIONS` and the README.**
   `-topmost` must be set after the window is mapped, and `root.focus_force()` must not be called after
   it (it raises the wall over the list; use `focus_set`).
+- Look and feel (checked by `tests/look_test.py`, `start_test.py`, `settings_test.py` and screenshots):
+  - Gutters and focus outline: each tile's frame is placed `TILE_GAP // 2` px inside its layout rect
+    (`Wall.animate`); the layout maths and logged rects are unchanged. `Wall.ring`, a blue frame below
+    the tiles, is placed at the focused tile's full rect so it shows through the gutter.
+  - On-screen text: every player gets `--osd-*` options (Segoe UI, fixed pixel size from the screen
+    height, `background-box` style, outline colour equal to the box colour so there are no black blobs,
+    top margin clear of the menu bar). The seek-bar label sets `\fnSegoe UI` itself and has a soft band
+    of five stacked translucent boxes behind it.
+  - Dark title bars: `dark_title_bar()` sets Windows' immersive dark mode and caption colour through
+    `DwmSetWindowAttribute`. **It must run after the window is mapped**: before that the call reports
+    success but changes nothing. Windows are shown at alpha 0, coloured, then faded in.
+  - Fades: `fade()` steps `-alpha`; the menu bar, controls list, settings and start window fade in over
+    120 ms and out over 80 ms. Ending at 1.0 makes a window opaque again, which screen capture needs.
+  - Rounded corners on the borderless controls list: `round_corners()` (Windows 11 only).
+  - Hover colours on flat buttons: `hover()`. The start window's drop zone is a Canvas with a dashed
+    border that lights up on `<<DropEnter>>` and can be clicked to choose files.
 - Log: `%TEMP%\tesserawall.log`, rewritten each run. Under `pythonw.exe` it is the only diagnostic.
 
 ## GPU driver timeouts
