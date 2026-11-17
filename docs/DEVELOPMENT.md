@@ -280,8 +280,10 @@ Notes for anyone running or writing them:
 - Screen captures cannot see translucent windows; `help_test.py` sets `TESSERAWALL_HELP_OPACITY=1`.
 - `mpv --o=file` (encoding) hangs on exit with the build used here although the file is written;
   `economy_test.py` waits for the file to stop growing and then stops its own encoder process.
-- Tests never touch the user's real settings or session: they pass `--config` / `--session`, and
-  `--exit-after` runs do not save a session.
+- Tests never touch the user's real settings or session. Any `--exit-after` run (every test uses it)
+  starts from the defaults with a throwaway settings file unless `--config` names one, and does not
+  save a session unless `--session` does. Before this, tests silently picked up the developer's own
+  settings: a dimming of 0 made `features_test.py` fail for no fault in the app.
 - Environment overrides exist for tests only: `TESSERAWALL_UNFOCUSED_SKIP`, `TESSERAWALL_HELP_OPACITY`,
   `TESSERAWALL_UNSAFE_RENDERING`, `TESSERAWALL_MPV_LOG_DIR`.
 - One unexplained event: `features_test.py` once failed "r should restart every video" and passed on

@@ -49,6 +49,8 @@ SETTINGS = [
     ("hover", "DRAG_THRESHOLD", 40, "Pixels the pointer must travel with the button held before a click becomes a drag."),
 
     ("focus", "DIM_UNFOCUSED", 15, "Darken unfocused videos by this much (0-100). 0 = off."),
+    ("focus", "TILE_GAP", 4, "Black gap between videos, in pixels. 0 = videos touch (and no outline)."),
+    ("focus", "FOCUS_OUTLINE", True, "Thin blue outline around the video you point at (needs a gap of 2 or more)."),
     ("focus", "SEEKBAR_HEIGHT", 6, "Progress line on the focused video, in pixels. 0 = off."),
     ("focus", "SEEKBAR_SHOW_NAME", True, "Show the file name next to the time."),
     ("focus", "SEEKBAR_COLOUR", "FFA34D", "Progress line colour as BGR hex."),

@@ -156,6 +156,7 @@ def main():
     assert code == 0 and "callback error" not in log and "settings window:" not in log
     assert r["dims_before"] == [-15, -15, -15, 0]
     assert r["opened_from_bar"]
+    assert "settings dark title bar: True" in log, "the settings window should get a dark title bar"
     assert r["dims_after_slider"] == [-20, -20, -20, 0] and r["file_after_slider"] == ["20"], "slider should apply live"
     assert r["grid_live"] and r["file_has_grid"]
     assert r["file_name_off"] and r["own_lines_kept"]

@@ -115,6 +115,7 @@ def main():
         p = launch(session); procs.append(p)
         w = wait_for(lambda: widgets() if "resume" in widgets() else None)
         r["widgets_with_session"] = sorted(w or {})
+        r["dark_title_bar"] = "start window dark title bar: True" in log_text()
         time.sleep(0.6)
         x0 = min(v[0] for v in w.values()); y1 = max(v[1] + v[3] for v in w.values())
         shot(os.path.join(tempfile.gettempdir(), "tesserawall-start.png"), (x0 - 40, w["drop"][1] - 130, w["drop"][2] + 80, y1 - w["drop"][1] + 200))
@@ -164,6 +165,7 @@ def main():
                 break
         time.sleep(2.5)
         r["drop_tiles"] = log_text().count("tile added")
+        r["drop_zone_lit"] = "drop zone highlighted" in log_text()
         r["drop_exit"] = p.wait(20)
 
         # 3. Esc closes the start window without opening a wall
@@ -191,6 +193,8 @@ def main():
     assert r["resume_positions"][0] >= 11 and r["resume_positions"][1] < 11, "resume should restore positions"
     assert r["widgets_without_session"] == ["drop", "folder", "settings", "videos"], "no resume button without a session"
     assert r["drop_tiles"] == 1 and r["drop_exit"] == 0, "dropping a file on the start window should open it"
+    assert r["dark_title_bar"], "the start window should get a dark title bar"
+    assert r["drop_zone_lit"], "dragging files over the window should light up the drop zone"
     assert r["start_window_is_foreground"] and r["esc_exit"] == 0 and r["esc_tiles"] == 0
     print("START TEST PASSED")
 

@@ -37,32 +37,44 @@ from layout import Rect, arrange, grid, layout, panscan_for
 
 # The on-screen controls list (H). Keep this in step with Wall.bind_keys: it is the only place a user
 # can discover the keys.
-HELP = [
-    ("Hover", "Focus a video: audio fades to it, it enlarges, the others dim"),
-    ("Click", "Pin the video so hover cannot change focus (click again to release)"),
-    ("Double-click", "Zoom the video to most of the screen (again to undo)"),
-    ("Drag onto another", "Swap the two videos' positions"),
-    ("Click / drag bottom edge", "Seek within the focused video"),
-    ("Space", "Pause the focused video"),
-    ("Shift + Space", "Pause or resume all"),
-    ("Left / Right, wheel", "Seek the focused video"),
-    ("Shift + Left / Right / wheel", "Seek all videos"),
-    ("R", "Restart all from the beginning"),
-    ("Up / Down", "Volume of the focused video"),
-    ("Page Down / Page Up", "Next / previous file from the focused video's folder"),
-    ("N", "Swap the focused video for a random one from its folder"),
-    ("X, Delete, middle-click", "Close the focused video"),
-    ("L", "Layout: grow, flat, grid"),
-    ("C", "Crop: limited, fill, fit"),
-    ("S", "Settings"),
-    ("F5", "Reload the settings file without restarting"),
-    ("0", "Unpin, unfocus and mute everything"),
-    ("Esc", "Close this list, else release pin/zoom, else quit"),
-    ("Q", "Quit and remember this session"),
-    ("U", "Open the download page, when a newer version is available"),
-    ("Pointer at the top edge", "Menu bar: add videos, controls, settings, close"),
-    ("H, ?, F1", "Show or hide this list"),
+HELP_SECTIONS = [
+    # (title, rows). A row's first item is either text (a mouse action) or a list of keys, drawn as key
+    # chips: alternatives separated by "/", combinations written "Shift+Space".
+    ("Mouse", [
+        ("Point at a video", "Focus it: its sound fades in, it grows, the others dim"),
+        ("Click", "Pin it, so pointing elsewhere keeps it focused (again to release)"),
+        ("Double-click", "Zoom it to most of the screen (again to undo)"),
+        ("Drag onto another", "Swap the two videos"),
+        ("Bottom edge", "Click or drag to seek"),
+        ("Wheel", "Seek; with Shift, seek every video"),
+        ("Middle-click", "Close the video"),
+        ("Top edge of screen", "Menu: add videos, controls, settings, close"),
+    ]),
+    ("Layout", [
+        (["L"], "Arrangement: grow, best fit, even grid"),
+        (["C"], "Black bars: crop a little, fill, never crop"),
+        (["0"], "Unpin, unfocus and mute everything"),
+    ]),
+    ("Playback", [
+        (["Space"], "Pause the focused video"),
+        (["Shift+Space"], "Pause or resume all"),
+        (["Left", "Right"], "Seek; with Shift, seek every video"),
+        (["Up", "Down"], "Volume of the focused video"),
+        (["R"], "Restart all from the beginning"),
+        (["Page Down", "Page Up"], "Next / previous file from its folder"),
+        (["N"], "Swap for a random file from its folder"),
+        (["X", "Delete"], "Close the focused video"),
+    ]),
+    ("App", [
+        (["H", "?", "F1"], "Show or hide this list"),
+        (["S"], "Settings"),
+        (["F5"], "Reload the settings file"),
+        (["U"], "Open the download page, when a new version is out"),
+        (["Esc"], "Close this list, release pin or zoom, else quit"),
+        (["Q"], "Quit and remember this session"),
+    ]),
 ]
+HELP_COLUMNS = (("Mouse", "Layout"), ("Playback", "App"))
 
 LAYOUT_MODES = ("grow", "flat", "grid")
 CROP_MODES = ("limited", "fill", "fit")
@@ -98,7 +110,8 @@ class Tile:
     start: Rect | None = None    # where the current animation began
     target: Rect | None = None   # where it is heading; hover hit-tests use this
     panscan: float | None = None
-    dim: int | None = None       # brightness last sent to mpv
+    dim: int | None = None
+    placed: tuple | None = None   # last frame.place geometry (after the gutter inset)       # brightness last sent to mpv
     skip: str | None = None      # vd-lavc-skipframe last sent to mpv (economy mode)
     volume: float = 100.0        # this video's own volume (Up/Down); survives focus changes
     gain: float = 0.0            # crossfade position: 0 = silent and muted, 1 = full volume
@@ -157,6 +170,7 @@ class Wall:
         self.hint_shown = False
         self.topbar: tk.Toplevel | None = None
         self.settings: tk.Toplevel | None = None
+        self.ring = tk.Frame(root, bg="#6CB6FF", highlightthickness=0, bd=0)   # focus outline
         self.top_since: float | None = None   # when the pointer reached the top edge
         self.dialog_open = False
         self.failed: list[str] = []           # files mpv could not open, not yet reported
@@ -194,6 +208,12 @@ class Wall:
                 "--mute=yes", "--osc=no", "--input-default-bindings=no", "--input-vo-keyboard=no",
                 "--input-cursor=no", "--cursor-autohide=no", "--loop-file=inf", "--keep-open=yes",
                 "--force-window=yes", "--no-terminal", "--hwdec=auto-safe", "--panscan=0"]
+        osd = max(16, self.H // 60)                     # 24 px on a 1440p screen, whatever the tile size
+        args += ["--osd-scale-by-window=no", f"--osd-font-size={osd}", "--osd-font=Segoe UI",
+                 "--osd-color=#FFE6E6E6", "--osd-border-style=background-box", "--osd-back-color=#D8101214",
+                 "--osd-outline-color=#D8101214",
+                 f"--osd-outline-size={max(4, osd // 3)}", f"--osd-margin-x={osd}",
+                 f"--osd-margin-y={self.H // 24}"]      # clear of the top-edge menu bar
         if not C.USE_USER_MPV_CONFIG:
             args.append("--no-config")
         if start and start > 1:
@@ -292,9 +312,19 @@ class Wall:
             s, g = t.start, t.target
             r = g if p >= 1 else Rect(round(s.x + (g.x - s.x) * e), round(s.y + (g.y - s.y) * e),
                                       round(s.w + (g.w - s.w) * e), round(s.h + (g.h - s.h) * e))
-            if r != t.rect:
-                t.rect = r
-                t.frame.place(x=r.x, y=r.y, width=r.w, height=r.h)
+            t.rect = r
+            half = max(0, int(C.TILE_GAP)) // 2           # each tile gives up half the gap on every side
+            geom = (r.x + half, r.y + half, max(1, r.w - 2 * half), max(1, r.h - 2 * half))
+            if geom != t.placed:
+                t.placed = geom
+                t.frame.place(x=geom[0], y=geom[1], width=geom[2], height=geom[3])
+        f = self.focus
+        if f in self.tiles and f.rect and C.FOCUS_OUTLINE and C.TILE_GAP >= 2:
+            r = f.rect                                    # shows through the gutter around the focused video
+            self.ring.place(x=r.x, y=r.y, width=r.w, height=r.h)
+            self.ring.lower()
+        else:
+            self.ring.place_forget()
         if p >= 1:
             self.anim_start = None
         return p < 1
@@ -494,38 +524,72 @@ class Wall:
         """Show/hide the controls list. It is its own always-on-top window, so it is drawn above the
         videos whatever presentation mode mpv uses; while the pointer is on it, hover is suspended."""
         if self.help:
-            self.help.destroy()
+            win = self.help
             self.help = None
+            fade(win, 0.0, 80, win.destroy)
             log.info("help hidden")
             return
         size = max(13, self.H // 64)                     # pixels; scales with the monitor
-        bg, pad = "#101214", size * 2
+        bg, chip, dim, accent, pad = "#101214", "#2A3038", "#9AA4AF", "#6CB6FF", size * 2
         win = tk.Toplevel(self.root)
         win.withdraw()                                   # build it hidden, then map it once, on top
         win.overrideredirect(True)
-        win.configure(bg=bg, padx=pad, pady=pad)
+        win.configure(bg=bg, padx=pad, pady=int(pad * 0.8))
         tk.Label(win, text="Tessera Wall controls", bg=bg, fg="white", font=("Segoe UI", -int(size * 1.5), "bold")
-                 ).grid(row=0, column=0, columnspan=2, sticky="w", pady=(0, size))
-        for i, (keys, action) in enumerate(HELP, start=1):
-            tk.Label(win, text=keys, bg=bg, fg="#6CB6FF", font=("Segoe UI", -size, "bold")
-                     ).grid(row=i, column=0, sticky="w", padx=(0, pad), pady=1)
-            tk.Label(win, text=action, bg=bg, fg="#E6E6E6", font=("Segoe UI", -size)
-                     ).grid(row=i, column=1, sticky="w", pady=1)
+                 ).grid(row=0, column=0, columnspan=3, sticky="w", pady=(0, size // 2))
+        sections = dict(HELP_SECTIONS)
+
+        def keys_cell(parent, keys):
+            cell = tk.Frame(parent, bg=bg)
+            if isinstance(keys, str):                    # a mouse action, in words
+                tk.Label(cell, text=keys, bg=bg, fg="white", font=("Segoe UI", -size, "bold")).pack(side="left")
+                return cell
+            for i, alt in enumerate(keys):
+                if i:
+                    tk.Label(cell, text="/", bg=bg, fg=dim, font=("Segoe UI", -size)).pack(side="left", padx=2)
+                for j, k in enumerate(alt.split("+")):
+                    if j:
+                        tk.Label(cell, text="+", bg=bg, fg=dim, font=("Segoe UI", -size)).pack(side="left", padx=2)
+                    tk.Label(cell, text=k, bg=chip, fg="white", font=("Segoe UI", -int(size * 0.85), "bold"),
+                             padx=max(4, size // 3), pady=0).pack(side="left")
+            return cell
+
+        for col, titles in enumerate(HELP_COLUMNS):
+            column = tk.Frame(win, bg=bg)
+            column.grid(row=1, column=col * 2, sticky="n")
+            if col:
+                tk.Frame(win, bg=bg, width=pad * 2).grid(row=1, column=1)      # space between the columns
+            r = 0
+            for title in titles:
+                tk.Label(column, text=title.upper(), bg=bg, fg=accent, font=("Segoe UI", -int(size * 0.8), "bold")
+                         ).grid(row=r, column=0, columnspan=2, sticky="w", pady=(size if r else 0, size // 3))
+                r += 1
+                for keys, action in sections[title]:
+                    keys_cell(column, keys).grid(row=r, column=0, sticky="w", padx=(0, size), pady=2)
+                    tk.Label(column, text=action, bg=bg, fg="#E6E6E6", font=("Segoe UI", -size)
+                             ).grid(row=r, column=1, sticky="w", pady=2)
+                    r += 1
         win.update_idletasks()
         w, h = win.winfo_reqwidth(), win.winfo_reqheight()
         win.geometry(f"+{self.root.winfo_rootx() + (self.W - w) // 2}+{self.root.winfo_rooty() + (self.H - h) // 2}")
-        win.bind_class(f"help{id(win)}", "<ButtonPress-1>", lambda e: (self.toggle_help(), "break")[1])
-        for widget in [win, *win.winfo_children()]:      # a click anywhere on the list closes it
-            widget.bindtags((f"help{id(win)}",))
+        tag = f"help{id(win)}"
+        win.bind_class(tag, "<ButtonPress-1>", lambda e: (self.toggle_help(), "break")[1])
+
+        def retag(widget):                               # a click anywhere on the list closes it
+            widget.bindtags((tag,))
+            for child in widget.winfo_children():
+                retag(child)
+        retag(win)
+        opacity = float(os.environ.get("TESSERAWALL_HELP_OPACITY", C.HELP_OPACITY))  # env override is for tests:
+        win.attributes("-alpha", 0.0)                    # screen captures cannot see translucent windows
         win.deiconify()
         win.attributes("-topmost", True)                 # must be set after mapping, or it sits behind the wall
-        opacity = float(os.environ.get("TESSERAWALL_HELP_OPACITY", C.HELP_OPACITY))  # env override is for tests:
-        if opacity < 1:                                  # screen captures cannot see translucent windows
-            win.attributes("-alpha", opacity)
+        rounded = round_corners(win)
         win.lift()
+        fade(win, min(1.0, opacity), 120)
         self.help = win
         self.root.focus_set()                            # keys keep going to the wall (never focus_force:
-        log.info("help shown %dx%d", w, h)               # that would raise the wall over the list)
+        log.info("help shown %dx%d rounded=%s", w, h, rounded)   # that would raise the wall over the list)
 
     # ---- menu bar at the top edge --------------------------------------------
     def update_topbar(self, pos, now):
@@ -571,18 +635,21 @@ class Wall:
         button("close", "Close  ✕", self.quit, side="right", hover="#C42B1C")
         bar.update_idletasks()
         bar.geometry(f"{self.W}x{bar.winfo_reqheight()}+{self.root.winfo_rootx()}+{self.root.winfo_rooty()}")
+        bar.attributes("-alpha", 0.0)
         bar.deiconify()
         bar.attributes("-topmost", True)                 # after mapping, like the controls list
         bar.lift()
         self.topbar = bar
         bar.update()                                     # lay the buttons out now: their positions are logged
+        fade(bar, 1.0, 120)
         log.info("top bar shown: %s", " ".join(
             f"{k}={b.winfo_rootx()},{b.winfo_rooty()},{b.winfo_width()},{b.winfo_height()}" for k, b in rects.items()))
 
     def hide_topbar(self):
         if self.topbar:
-            self.topbar.destroy()
-            self.topbar, self.top_since = None, None
+            bar = self.topbar
+            self.topbar, self.top_since = None, None      # gone as far as the wall is concerned
+            fade(bar, 0.0, 80, bar.destroy)
             self.root.focus_set()                        # keys go back to the wall
             log.info("top bar hidden")
 
@@ -687,9 +754,13 @@ class Wall:
             room = int((w - 20) / (size * 0.5)) - len(text) - 3   # ~0.46 of the font size per Latin letter
             if room >= 8:
                 text = (name if len(name) <= room else name[:room - 1] + "…") + "   " + text
-        label = "{\\an1\\pos(10,%d)\\fs%d\\bord2\\shad0\\1c&HFFFFFF&\\3c&H000000&}%s" % (y0 - 6, size, text)
+        label = "{\\an1\\pos(10,%d)\\fnSegoe UI\\fs%d\\bord1.5\\shad0\\1c&HE6E6E6&\\3c&H141210&}%s" % (y0 - 6, size, text)
         # Dark track (2 px taller, so the bar has an edge on bright video) + coloured fill (ASS colours are BGR).
-        data = "\n".join([box(0, w, "000000", "50", y0 - 2), box(0, x1, C.SEEKBAR_COLOUR, "00"), label])
+        # Soft dark band behind the text: five stacked boxes, each ~15 % black, overlapping more towards
+        # the bottom, so it darkens gradually instead of ending in a hard edge.
+        band = int(size * 2.6)
+        scrim = [box(0, w, "000000", "D8", y0 - band + i * band // 5) for i in range(5)]
+        data = "\n".join(scrim + [box(0, w, "000000", "50", y0 - 2), box(0, x1, C.SEEKBAR_COLOUR, "00"), label])
         t.ipc.post({"name": "osd-overlay", "id": 1, "format": "ass-events", "data": data,
                        "res_x": w, "res_y": h})
 
@@ -853,6 +924,8 @@ class Wall:
         if self.cursor_hidden:
             self.cursor_hidden = False
             self.root.config(cursor="")
+        for t in self.tiles:
+            t.placed = None
         self.pos_at_focus_change = self.cursor()
         self.relayout(rearrange=True)
 
@@ -1059,6 +1132,61 @@ def enable_drop(root, incoming: queue.Queue):
         log.info("drag-and-drop onto the wall disabled: %s", e)
 
 
+def dark_title_bar(win) -> bool:
+    """Give a window a dark title bar matching its body (#101214), through the same Windows option
+    dark-mode apps use. Windows 11 honours the exact colour; Windows 10 20H1+ uses its own dark grey."""
+    try:
+        win.update_idletasks()
+        hwnd = wintypes.HWND(user32.GetAncestor(win.winfo_id(), GA_ROOT))
+        dwm = ctypes.windll.dwmapi
+        on = ctypes.c_int(1)
+        ok = dwm.DwmSetWindowAttribute(hwnd, 20, ctypes.byref(on), ctypes.sizeof(on)) == 0   # immersive dark mode
+        caption, text = ctypes.c_uint(0x00141210), ctypes.c_uint(0x00E6E6E6)                  # COLORREF = 0x00BBGGRR
+        dwm.DwmSetWindowAttribute(hwnd, 35, ctypes.byref(caption), 4)
+        dwm.DwmSetWindowAttribute(hwnd, 36, ctypes.byref(text), 4)
+        return ok
+    except Exception as e:
+        log.info("dark title bar unavailable: %s", e)
+        return False
+
+
+def fade(win, to: float, ms: int, then=None):
+    """Change a window's opacity smoothly, then run `then`. Quietly stops if the window is gone.
+    Ending at 1.0 makes the window opaque again (tk drops the layered style), which screen capture needs."""
+    try:
+        start = float(win.attributes("-alpha"))
+    except tk.TclError:
+        return
+    steps = max(1, ms // 15)
+
+    def step(i):
+        try:
+            win.attributes("-alpha", start + (to - start) * i / steps)
+        except tk.TclError:
+            return
+        if i < steps:
+            win.after(15, step, i + 1)
+        elif then:
+            then()
+    step(1)
+
+
+def round_corners(win) -> bool:
+    """Windows 11: round a borderless window's corners like a normal one. No effect on Windows 10."""
+    try:
+        hwnd = wintypes.HWND(user32.GetAncestor(win.winfo_id(), GA_ROOT))
+        pref = ctypes.c_int(2)                                   # DWMWCP_ROUND
+        return ctypes.windll.dwmapi.DwmSetWindowAttribute(hwnd, 33, ctypes.byref(pref), 4) == 0
+    except Exception:
+        return False
+
+
+def hover(widget, normal: str, hot: str):
+    """Lighten a flat button while the pointer is over it."""
+    widget.bind("<Enter>", lambda e: widget.config(bg=hot), add="+")
+    widget.bind("<Leave>", lambda e: widget.config(bg=normal), add="+")
+
+
 def set_icon(win):
     """Window/taskbar icon. The files sit next to the program (build.ps1 copies them into packaged builds)."""
     try:
@@ -1085,15 +1213,17 @@ def make_root():
 # settings file. Kinds: ("section", title) | ("scale", NAME, label, low, high, step)
 #   | ("choice", NAME, label, [(value, text), ...]) | ("check", NAME, label)
 #   | ("check", NAME, label, value_when_on, value_when_off)
+# A scale's last item formats its value for display, e.g. "{} ms".
 SETTINGS_UI = [
     ("section", "When you point at a video"),
-    ("scale", "FOCUS_SCALE", "How much it grows", 1.0, 2.5, 0.05),
-    ("scale", "DIM_UNFOCUSED", "How much the other videos dim", 0, 60, 1),
-    ("scale", "CROSSFADE_MS", "Sound fade between videos (milliseconds)", 0, 1000, 10),
+    ("scale", "FOCUS_SCALE", "How much it grows", 1.0, 2.5, 0.05, "{:.2f}\u00d7"),
+    ("scale", "DIM_UNFOCUSED", "How much the other videos dim", 0, 60, 1, "{} %"),
+    ("scale", "CROSSFADE_MS", "Sound fade between videos", 0, 1000, 10, "{} ms"),
     ("section", "Layout"),
     ("choice", "LAYOUT_MODE", "Arrangement", [("grow", "Grow on hover"), ("flat", "Best fit"), ("grid", "Even grid")]),
     ("choice", "CROP_MODE", "Black bars", [("limited", "Crop a little"), ("fill", "Crop to fill"), ("fit", "Never crop")]),
     ("section", "Other"),
+    ("check", "FOCUS_OUTLINE", "Outline the video you point at"),
     ("check", "SEEKBAR_SHOW_NAME", "Show the file name on the video you point at"),
     ("check", "CURSOR_HIDE_SECONDS", "Hide the pointer when it is not moving", 2.0, 0.0),
     ("check", "UNFOCUSED_SKIP", "Save power: lower frame rate on the other videos (they look choppy)", "nonref", ""),
@@ -1154,7 +1284,7 @@ def settings_window(parent, config_path: str, apply, on_close, topmost: bool = F
         if kind == "section":
             tk.Label(win, text=item[1], bg=bg, fg=accent, font=font(1.0, True)).pack(anchor="w", pady=(u, u // 4))
         elif kind == "scale":
-            _, name, label, low, high, step = item
+            _, name, label, low, high, step, unit = item
             whole = isinstance(C.DEFAULTS[name], int)
             row = tk.Frame(win, bg=bg)
             row.pack(fill="x")
@@ -1164,16 +1294,17 @@ def settings_window(parent, config_path: str, apply, on_close, topmost: bool = F
             sw_, sh_, pad = u * 15, int(u * 1.6), u // 2
             cv = tk.Canvas(row, width=sw_, height=sh_, bg=bg, highlightthickness=0, cursor="hand2")
             cv.pack(side="left")
-            shown = tk.Label(row, bg=bg, fg=dim, font=font(0.95), width=6, anchor="e")
+            shown = tk.Label(row, bg=bg, fg=dim, font=font(0.95), width=8, anchor="e")
             shown.pack(side="left")
 
-            def draw(value, cv=cv, shown=shown, low=low, high=high, whole=whole, sw_=sw_, sh_=sh_, pad=pad):
+            def draw(value, cv=cv, shown=shown, low=low, high=high, whole=whole, sw_=sw_, sh_=sh_, pad=pad,
+                     unit=unit):
                 x = pad + (sw_ - 2 * pad) * (value - low) / (high - low)
                 cv.delete("all")
                 cv.create_rectangle(pad, sh_ // 2 - 2, sw_ - pad, sh_ // 2 + 2, fill="#2A3038", width=0)
                 cv.create_rectangle(pad, sh_ // 2 - 2, x, sh_ // 2 + 2, fill=accent, width=0)
                 cv.create_oval(x - pad, sh_ // 2 - pad, x + pad, sh_ // 2 + pad, fill="white", width=0)
-                shown.config(text=str(int(value)) if whole else f"{value:.2f}")
+                shown.config(text=unit.format(int(value) if whole else value))
 
             def pick(e, n=name, draw=draw, low=low, high=high, step=step, whole=whole, sw_=sw_, pad=pad):
                 frac = min(1.0, max(0.0, (e.x - pad) / (sw_ - 2 * pad)))
@@ -1199,6 +1330,7 @@ def settings_window(parent, config_path: str, apply, on_close, topmost: bool = F
                                    activeforeground=fg, relief="flat", bd=0, padx=u, pady=u // 3, cursor="hand2",
                                    command=lambda n=name, v=var: change(n, v.get()))
                 b.pack(side="left", padx=(0, u // 3))
+                hover(b, panel, "#2A3038")                 # the selected one shows its blue select colour
                 located[f"{name}:{value}"] = group[value] = b
             # dark text on the selected (blue) button, light text on the others
             var.trace_add("write", lambda *a, v=var, g=group: [b.config(fg="#0B0D0F" if k == v.get() else fg)
@@ -1233,8 +1365,8 @@ def settings_window(parent, config_path: str, apply, on_close, topmost: bool = F
         if timer[0]:
             win.after_cancel(timer[0])
         flush()
-        win.destroy()
         on_close()
+        fade(win, 0.0, 80, win.destroy)
 
     status = tk.Label(win, text="Changes are saved as you make them.", bg=bg, fg=dim, font=font(0.9))
     status.pack(anchor="w", pady=(u, u // 2))
@@ -1246,6 +1378,7 @@ def settings_window(parent, config_path: str, apply, on_close, topmost: bool = F
                       bg=accent if primary else panel, fg="#0B0D0F" if primary else fg, padx=u, pady=u // 3,
                       activebackground="#8FC8FF" if primary else "#2A3038", activeforeground="#0B0D0F" if primary else fg)
         b.pack(side=side, padx=(0, u // 2) if side == "left" else (u // 2, 0))
+        hover(b, accent if primary else panel, "#8FC8FF" if primary else "#2A3038")
         located[key] = b
 
     button("reset", "Reset these to defaults", reset)
@@ -1267,12 +1400,15 @@ def settings_window(parent, config_path: str, apply, on_close, topmost: bool = F
     w, h = win.winfo_reqwidth(), win.winfo_reqheight()
     mx, my, mw, mh = monitor_under_cursor()
     win.geometry(f"+{mx + (mw - w) // 2}+{my + (mh - h) // 2}")
+    win.attributes("-alpha", 0.0)
     win.deiconify()
+    log.info("settings dark title bar: %s", dark_title_bar(win))
     if topmost:              # above the full-screen wall; must be set after the window is mapped
         win.attributes("-topmost", True)
     win.lift()
     win.focus_force()
     win.update()
+    fade(win, 1.0, 120)
     log.info("settings shown: %s", " ".join(
         f"{k}={b.winfo_rootx()},{b.winfo_rooty()},{b.winfo_width()},{b.winfo_height()}" for k, b in located.items()))
     return win
@@ -1286,6 +1422,7 @@ def start_window(last_session: list, incoming: queue.Queue, checker: "updates.Ch
     window was closed. It is a separate Tk root that is destroyed before the wall is created.
     """
     root = make_root()
+    root.withdraw()                                       # built hidden and shown once, finished
     root.title("Tessera Wall")
     chosen: list = []
     u = max(12, root.winfo_screenheight() // 90)          # layout unit in pixels; 16 on a 1440p screen
@@ -1322,9 +1459,31 @@ def start_window(last_session: list, incoming: queue.Queue, checker: "updates.Ch
     tk.Label(root, text="Play several videos at once, side by side.", bg=bg, fg=dim, font=font(1.05)
              ).pack(anchor="w", pady=(0, u))
     can_drop = hasattr(root, "drop_target_register")
-    drop = tk.Label(root, text="Drop videos or folders here" if can_drop else "Choose what to play",
-                    bg=panel, fg=fg, font=font(1.3))
+    drop = tk.Canvas(root, bg=bg, highlightthickness=0, cursor="hand2", height=u * 8)
     drop.pack(fill="both", expand=True, pady=(0, u))
+    zone = {"state": "idle"}
+
+    def draw_zone(state=None):
+        zone["state"] = state or zone["state"]
+        w_, h_ = drop.winfo_width(), drop.winfo_height()
+        if w_ < 10:
+            return
+        lit = zone["state"] == "drag"
+        warm = zone["state"] == "hover"
+        drop.delete("all")
+        drop.create_rectangle(1, 1, w_ - 2, h_ - 2, dash=(6, 5), width=2,
+                              outline=accent if lit else ("#55606C" if warm else "#3A424C"),
+                              fill="#18263A" if lit else ("#1F242B" if warm else panel))
+        drop.create_text(w_ // 2, h_ // 2 - u // 2, fill=accent if lit else fg, font=font(1.3),
+                         text="Release to play" if lit else
+                         ("Drop videos or folders here" if can_drop else "Choose what to play"))
+        drop.create_text(w_ // 2, h_ // 2 + u, fill=dim, font=font(0.9),
+                         text="" if lit else "or click to choose videos")
+
+    drop.bind("<Configure>", lambda e: draw_zone())
+    drop.bind("<Enter>", lambda e: draw_zone("hover") if zone["state"] != "drag" else None)
+    drop.bind("<Leave>", lambda e: draw_zone("idle") if zone["state"] != "drag" else None)
+    drop.bind("<Button-1>", lambda e: pick_files())
     buttons = {}
 
     def button(key, text, command, primary=False):
@@ -1333,6 +1492,7 @@ def start_window(last_session: list, incoming: queue.Queue, checker: "updates.Ch
                       activebackground="#8FC8FF" if primary else "#2A3038", activeforeground="#0B0D0F" if primary else fg,
                       pady=u // 2)
         b.pack(fill="x", pady=(0, u // 2))
+        hover(b, accent if primary else panel, "#8FC8FF" if primary else "#2A3038")
         buttons[key] = b
         return b
 
@@ -1361,7 +1521,23 @@ def start_window(last_session: list, incoming: queue.Queue, checker: "updates.Ch
         try:
             from tkinterdnd2 import DND_FILES
             root.drop_target_register(DND_FILES)
-            root.dnd_bind("<<Drop>>", lambda e: finish(expand(list(root.tk.splitlist(e.data)))))
+            def drag_enter(e):
+                draw_zone("drag")
+                log.info("drop zone highlighted")
+                return e.action
+
+            def drag_leave(e):
+                draw_zone("idle")
+                return e.action
+
+            def dropped(e):
+                draw_zone("idle")
+                finish(expand(list(root.tk.splitlist(e.data))))
+                return e.action
+
+            root.dnd_bind("<<DropEnter>>", drag_enter)
+            root.dnd_bind("<<DropLeave>>", drag_leave)
+            root.dnd_bind("<<Drop>>", dropped)
         except Exception as e:
             log.info("start window: drag-and-drop unavailable: %s", e)
     root.bind("<Escape>", lambda e: root.destroy())
@@ -1390,6 +1566,9 @@ def start_window(last_session: list, incoming: queue.Queue, checker: "updates.Ch
             show_update(checker.result)
         root.after(150, check_handed_over)
     root.after(150, check_handed_over)
+    root.attributes("-alpha", 0.0)
+    root.deiconify()
+    log.info("start window dark title bar: %s", dark_title_bar(root))
     root.update()
     for key, b in {**buttons, "drop": drop}.items():      # positions, so tests can click the real buttons
         log.info("start window %s at %d,%d %dx%d", key, b.winfo_rootx(), b.winfo_rooty(),
@@ -1397,6 +1576,7 @@ def start_window(last_session: list, incoming: queue.Queue, checker: "updates.Ch
     root.attributes("-topmost", True)                     # come to the front even if launched in the background
     root.lift()
     root.focus_force()
+    fade(root, 1.0, 120)
     root.after(400, lambda: root.attributes("-topmost", False))
     root.mainloop()
     return chosen or None
@@ -1415,8 +1595,12 @@ def main():
 
     # Settings first: opening a folder depends on video_exts.
     config_path = ns.config or C.user_config_path()
+    if ns.exit_after > 0 and not ns.config:
+        # Test runs (--exit-after) use the defaults and a throwaway settings file, never the user's own:
+        # a test must not depend on, or change, what the person running it has chosen.
+        config_path = os.path.join(tempfile.mkdtemp(prefix="tesserawall-test-"), "config.toml")
     notice = None
-    if not ns.config:
+    if not ns.config and not ns.exit_after > 0:
         C.migrate_old_settings()      # settings from before the rename, copied once
         C.ensure_user_file(config_path)
     try:
