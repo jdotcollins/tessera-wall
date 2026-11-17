@@ -66,6 +66,11 @@ for a small menu bar with *Add videos*, *Add a folder*, *Controls* and *Close*.
 | `Up` `Down` | Volume of the focused video (remembered per video) |
 | `Page Down` / `Page Up` | Next / previous file from the focused video's folder |
 | `N` | Swap the focused video for a random one from its folder |
+| `[` `]` / `Backspace` | Slower / faster; back to normal speed |
+| `,` `.` | Step one frame back / forward |
+| `B` | Loop a section: set start, set end, clear |
+| `T` / `A` | Next subtitle track / next audio track |
+| `P` | Save a snapshot of the focused video (in Pictures\Tessera Wall; `snapshot_dir` in the settings file) |
 | `X` `Delete` middle-click | Close the focused video |
 | `L` | Layout: grow, flat, grid |
 | `C` | Crop: limited, fill, fit |

@@ -5,11 +5,12 @@ import logging
 import os
 import queue
 import random
+import re
 import subprocess
 import time
 import tkinter as tk
 from ctypes import wintypes
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from tkinter import filedialog
 from tkinter import messagebox
 
@@ -23,7 +24,7 @@ import config as C
 import updates
 from files import expand
 from ui import fade, hover, round_corners, settings_window
-from winapi import GA_ROOT, user32
+from winapi import GA_ROOT, pictures_folder, user32
 
 log = logging.getLogger("tesserawall")
 
@@ -56,6 +57,12 @@ HELP_SECTIONS = [
         (["R"], "Restart all from the beginning"),
         (["Page Down", "Page Up"], "Next / previous file from its folder"),
         (["N"], "Swap for a random file from its folder"),
+        (["[", "]"], "Slower / faster (Backspace: normal speed)"),
+        ([",", "."], "Step one frame back / forward"),
+        (["B"], "Loop a section: set start, set end, clear"),
+        (["T"], "Next subtitle track"),
+        (["A"], "Next audio track"),
+        (["P"], "Save a snapshot to Pictures"),
         (["X", "Delete"], "Close the focused video"),
     ]),
     ("App", [
@@ -97,6 +104,7 @@ class Tile:
     idle_since: float | None = None   # when mpv was first seen idle (file failed to open)
     swapped: bool = False        # file was replaced with `n`; wait for mpv to report the new one
     swap_seq: int = 0            # ipc.seq when the replacement was requested; only newer news counts
+    restarts: list = field(default_factory=list)   # times this tile's player was restarted after a crash
 
 
 def fmt_time(s: float) -> str:
@@ -179,6 +187,17 @@ class Wall:
             return
         frame = tk.Frame(self.root, bg="black", highlightthickness=0, bd=0)
         frame.place(x=0, y=0, width=1, height=1)
+        started = self.spawn(frame, path, start)
+        if not started:
+            frame.destroy()
+            return
+        proc, pipe = started
+        self.tiles.append(Tile(path, frame, proc, pipe, time.monotonic()))
+        self.need_layout = True
+        log.info("tile added #%d pipe=%s path=%s", self.counter, pipe, path)
+
+    def spawn(self, frame, path: str, start: float = 0):
+        """Start an mpv player drawing into `frame`. Returns (process, pipe name), or None on failure."""
         self.counter += 1
         pipe = rf"\\.\pipe\tesserawall-{os.getpid()}-{self.counter}"
         args = [self.mpv, f"--wid={frame.winfo_id()}", f"--input-ipc-server={pipe}",
@@ -208,11 +227,30 @@ class Wall:
             proc = subprocess.Popen(args, creationflags=subprocess.CREATE_NO_WINDOW)
         except OSError as e:
             log.error("could not start mpv for %s: %s", path, e)
-            frame.destroy()
-            return
-        self.tiles.append(Tile(path, frame, proc, pipe, time.monotonic()))
+            return None
+        return proc, pipe
+
+    def restart(self, t: Tile, code) -> bool:
+        """A player that was showing video exited with an error: start a new one in the same tile at
+        the same moment. At most 3 times a minute per tile, so a file that keeps crashing is dropped."""
+        now = time.monotonic()
+        t.restarts = [x for x in t.restarts if now - x < 60]
+        if len(t.restarts) >= 3:
+            log.info("not restarting again (3 crashes in a minute): %s", t.path)
+            return False
+        pos = (t.ipc.value("time-pos") if t.ipc else None) or 0
+        if t.ipc:
+            t.ipc.close()
+        started = self.spawn(t.frame, t.path, pos)
+        if not started:
+            return False
+        t.proc, t.pipe = started
+        t.ipc, t.born, t.restarts = None, now, t.restarts + [now]
+        t.panscan = t.dim = t.skip = None              # resend to the new player
+        t.gain = 0.0                                   # starts muted; the crossfade brings sound back
         self.need_layout = True
-        log.info("tile added #%d pipe=%s path=%s", self.counter, pipe, path)
+        log.info("tile restarted (mpv exited with %s) at %.1fs pipe=%s: %s", code, pos, t.pipe, t.path)
+        return True
 
     def remove(self, tile: Tile, why: str):
         log.info("tile removed (%s): %s", why, tile.path)
@@ -779,9 +817,12 @@ class Wall:
         now = time.monotonic()
         for t in list(self.tiles):
             if t.proc.poll() is not None:
-                if t.proc.returncode != 0 and not t.aspect_known:   # never showed a picture
+                code = t.proc.returncode
+                if code != 0 and not t.aspect_known:   # never showed a picture
                     self.failed.append(t.path)
-                self.remove(t, f"mpv exited with {t.proc.returncode}")
+                elif code != 0 and self.restart(t, code):
+                    continue
+                self.remove(t, f"mpv exited with {code}")
             elif t.ipc is None:
                 try:
                     # Never block the UI thread on a player: no waiting handshake, and the values the
@@ -874,6 +915,38 @@ class Wall:
         if self.focus and self.focus.ipc:
             self.focus.ipc.post(*args)
 
+    def change_speed(self, factor):
+        """[ and ]: slower / faster by 10 %; Backspace (factor None): normal speed. mpv shows the result."""
+        if factor is None:
+            self.cmd("osd-msg", "set", "speed", "1")   # "set" takes its value as text
+        else:
+            self.cmd("osd-msg", "multiply", "speed", factor)
+
+    def cycle_track(self, kind: str):
+        """T / A: next subtitle / audio track of the focused video; mpv names the track on screen."""
+        self.cmd("osd-msg", "cycle", kind)
+
+    def snapshot(self):
+        """P: save the focused video's current frame (without overlays) as a PNG."""
+        t = self.focus
+        if not t or not t.ipc:
+            return
+        folder = C.SNAPSHOT_DIR or os.path.join(pictures_folder(), "Tessera Wall")
+        try:
+            os.makedirs(folder, exist_ok=True)
+        except OSError as e:
+            t.ipc.post("show-text", f"Couldn't save a snapshot: {e}"[:120], 4000)
+            return
+        base = "stream" if "://" in t.path else os.path.splitext(os.path.basename(t.path))[0]
+        base = re.sub(r'[<>:"/\\|?*]', "_", base)[:80]
+        secs = int(t.ipc.value("time-pos") or 0)
+        at = (f"{secs // 3600}h{secs % 3600 // 60:02d}m{secs % 60:02d}s" if secs >= 3600
+              else f"{secs // 60}m{secs % 60:02d}s")
+        path = os.path.join(folder, f"{base} at {at} {time.strftime('%Y%m%d-%H%M%S')}.png")
+        t.ipc.post("screenshot-to-file", path, "video")
+        t.ipc.post("show-text", f"Snapshot saved in {folder}", 2500)
+        log.info("snapshot: %s", path)
+
     def pause_all(self):
         ref = self.focus or (self.tiles[0] if self.tiles else None)
         if not ref or not ref.ipc:
@@ -959,6 +1032,15 @@ class Wall:
         b("<Up>", lambda e: self.change_volume(C.VOLUME_STEP))
         b("<Down>", lambda e: self.change_volume(-C.VOLUME_STEP))
         b("<n>", lambda e: self.swap_random())
+        b("<bracketleft>", lambda e: self.change_speed(1 / 1.1))
+        b("<bracketright>", lambda e: self.change_speed(1.1))
+        b("<BackSpace>", lambda e: self.change_speed(None))
+        b("<comma>", lambda e: self.cmd("frame-back-step"))
+        b("<period>", lambda e: self.cmd("frame-step"))
+        b("<b>", lambda e: self.cmd("osd-msg", "ab-loop"))
+        b("<t>", lambda e: self.cycle_track("sub"))
+        b("<a>", lambda e: self.cycle_track("audio"))
+        b("<p>", lambda e: self.snapshot())
         b("<F5>", lambda e: self.reload_config())
         b("<s>", lambda e: self.toggle_settings())
         b("<u>", lambda e: self.open_update())

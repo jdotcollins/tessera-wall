@@ -283,6 +283,21 @@ python test_config.py
 python test_updates.py
 python tests/smoke.py           # every test below takes over the screen, mouse and often keyboard
 python tests/freeze_test.py     # a suspended player must not stall the wall
+python tests/phase2_test.py     # speed, frame step, A-B loop, tracks, snapshot, crash restart
+```
+
+Phase 2 notes (playback keys, snapshots, crash restart):
+- Speed, frame step, A-B loop and track keys post mpv commands with the `osd-msg` prefix, so mpv
+  itself shows the result on the video. `set` needs its value as text (`"1"`, not `1`): mpv silently
+  ignored a number.
+- Snapshots: `screenshot-to-file <path> video` (the frame without overlays), named
+  `<file> at <m>m<ss>s <date-time>.png`, into `snapshot_dir` or `winapi.pictures_folder()`\Tessera Wall
+  (the real Pictures folder via `SHGetKnownFolderPath`, so OneDrive redirection is respected).
+- Crash restart: a player that exits with a non-zero code after it had shown video is restarted into
+  the same frame at its last pushed `time-pos` (`Wall.restart`, `Wall.spawn`), at most 3 times a minute
+  per tile, then the tile is removed as before. A player closed by the user exits with 0 and is removed.
+
+```
 python tests/add_test.py
 python tests/drop_test.py       # needs tkinterdnd2
 python tests/features_test.py   # writes a 26 MB clip to %TEMP% on first run; other tests reuse it

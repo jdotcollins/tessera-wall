@@ -66,6 +66,7 @@ SETTINGS = [
 
     ("controls", "SEEK_SECONDS", 5, "Seek step for the arrow keys and wheel."),
     ("controls", "HELP_OPACITY", 0.94, "Controls list (H): 1 = solid, lower lets the videos show through."),
+    ("controls", "SNAPSHOT_DIR", "", 'Folder for snapshots (P). Empty = "Tessera Wall" in your Pictures folder.'),
     ("controls", "SHOW_HELP_HINT", True, 'Show "Press H for controls" briefly at launch.'),
 
     ("updates", "UPDATE_CHECK", True,
