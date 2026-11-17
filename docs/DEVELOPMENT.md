@@ -21,9 +21,14 @@ folder on the development PC still has the old name; nothing depends on it.
 
 | File | Purpose |
 |---|---|
-| `tesserawall.pyw` | The app: window, tiles, hover, animation, input, single instance |
+| `tesserawall.pyw` | Entry point only: DPI setup, settings, single instance, start window, then the wall |
+| `wall.py` | The wall: `Tile`, `Wall` (layout and animation, hover and focus, input, audio, overlays), the controls table |
+| `ui.py` | Start window, Settings window, and window helpers (dark title bar, fades, rounded corners, hover, icon, drag-and-drop) |
+| `instance.py` | One wall per user: control pipe, gathering multi-file launches, the listener thread |
+| `files.py` | Arguments to video paths, Explorer's sort order, the saved session |
+| `winapi.py` | The shared `user32` handle and the monitor under the pointer |
 | `layout.py` | Pure tiling maths: `arrange`, `layout`, `grid`, `panscan_for`, `Rect` |
-| `ipc.py` | mpv JSON-IPC client over a Windows named pipe |
+| `ipc.py` | mpv JSON-IPC client over a Windows named pipe: pushed property values, non-blocking sends |
 | `config.py` | Setting defaults (`SETTINGS` table), the user's TOML file, locating mpv |
 | `install.ps1` | Creates Send To + Desktop shortcuts (`-Uninstall` removes them) |
 | `test_layout.py`, `test_config.py` | Unit tests; no display needed |
@@ -105,6 +110,20 @@ folder on the development PC still has the old name; nothing depends on it.
   at the moment of use; **do not cache setting values in locals or closures**. Settings used when a
   player is launched (`MPV_PATH`, `SAFE_RENDERING`, `EXTRA_MPV_ARGS`, `USE_USER_MPV_CONFIG`,
   `MPV_LOG_DIR`) only affect videos opened afterwards; `LOG_PATH` is read once at start.
+- Talking to the players (`ipc.py`): the wall never waits on a player. On connecting it calls
+  `observe()` for the properties it needs (idle state, size, video params, position, duration, pause);
+  mpv pushes every change and the reader thread keeps the latest in `value()`. Commands go through
+  `post()`, a bounded queue drained by a writer thread, so a player that stops reading cannot block
+  the interface (overflow is dropped and counted in `dropped`). Every incoming message gets a sequence
+  number, used after a file swap: the new size only counts once `file-loaded` arrived after the swap
+  and a size or `video-reconfig` arrived after that (mpv reports the new path before the new size).
+  The blocking `get`/`set`/`command` remain for tests and quitting. `tests/freeze_test.py` suspends a
+  player: before this design the wall had not reacted after 8 s; now it reacts in about 0.2 s.
+- Layout search (`layout.py`): every possible split into rows is scored up to `EXACT_UP_TO` (12)
+  videos; splits are scored from running totals, so 12 videos take about 11 ms. Above 12 a fast search
+  is used (near-equal-width cuts, three starting points, cut moves while the score improves): 30 videos
+  in about 28 ms, as good as the exact search on 86 % of 13-15 video walls (median 4.5 % worse
+  otherwise, worst 24 %). Results are cached. `test_layout.py` keeps the quality and speed floor.
 - mpv is located by `config.find_mpv()`: the `mpv_path` setting if set (no fallback if it is wrong),
   else the copy shipped with a packaged build (`mpv\mpv.exe` next to the program, see `app_dir()`),
   else the App Paths registry entry, Scoop's real exe, `PATH`, then common install folders.
@@ -261,7 +280,9 @@ bundled pin), Python 3.13, one 2560x1440 monitor at 100% scaling, AMD GPU with H
 ```
 python test_layout.py
 python test_config.py
+python test_updates.py
 python tests/smoke.py           # every test below takes over the screen, mouse and often keyboard
+python tests/freeze_test.py     # a suspended player must not stall the wall
 python tests/add_test.py
 python tests/drop_test.py       # needs tkinterdnd2
 python tests/features_test.py   # writes a 26 MB clip to %TEMP% on first run; other tests reuse it
@@ -277,15 +298,15 @@ python tests/start_test.py      # the start window: resume button, drop, Esc
 python tests/update_test.py     # update notice against a local fake server
 python tests/polish_test.py     # top-edge menu bar; "couldn't play" message
 python tests/settings_test.py   # settings window: slider, choice, checkbox, reset, S / Esc
-python test_updates.py          # update-check logic; no display, no network
 python tests/label_test.py      # visual: saves screenshots, asserts only that nothing crashed
 python tests/stress_test.py     # GPU driver-timeout check
 ```
 
 Notes for anyone running or writing them:
 
-- They need a real desktop, a GPU and mpv, so they cannot run in ordinary CI. Only the two unit-test
-  files can.
+- They need a real desktop, a GPU and mpv, so they cannot run in ordinary CI. The three unit-test
+  files (`test_layout.py`, `test_config.py`, `test_updates.py`) run on GitHub Actions on every push
+  (`.github/workflows/unit-tests.yml`, Windows, Python 3.11 and 3.13).
 - They move the real pointer. A person using the mouse during a run, or a driver popup appearing over
   the wall, makes them fail. Re-run a failing test alone and read `%TEMP%\tesserawall.log` before
   suspecting the app.

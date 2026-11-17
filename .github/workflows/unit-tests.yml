@@ -1,0 +1,30 @@
+# Runs the unit tests (no display, no mpv, no network) on every push and pull request.
+# The end-to-end tests in tests/ need a real desktop, a GPU and mpv, so they stay a manual check:
+# see docs/DEVELOPMENT.md, "Tests".
+name: Unit tests
+
+on:
+  push:
+  pull_request:
+
+permissions:
+  contents: read
+
+jobs:
+  unit-tests:
+    runs-on: windows-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        python-version: ["3.11", "3.13"]
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: ${{ matrix.python-version }}
+      - name: Layout
+        run: python test_layout.py
+      - name: Settings
+        run: python test_config.py
+      - name: Update check
+        run: python test_updates.py
