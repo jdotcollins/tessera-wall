@@ -5,18 +5,29 @@ The videos are tiled to fill the monitor. Hover one and its audio fades in, it g
 dim and shrink.
 
 > **Status: beta.** Tessera Wall has so far been developed and tested on one PC (Windows 11, one 2560x1440
-> monitor, AMD GPU). Other GPUs, Windows 10, mixed-DPI and multi-monitor setups are untested. Please
-> report what you find.
+> monitor, AMD GPU). Other GPUs, Windows 10, mixed-DPI and multi-monitor setups are untested, and the
+> installer has not yet been tried on a second PC. Please
+> [report what you find](https://github.com/jdotcollins/tessera-wall/issues).
 
-## Requirements
+## Install
 
-- Windows 10 or 11
-- [mpv](https://mpv.io/installation/), installed separately. Tessera Wall finds it on `PATH` and in the
-  usual install folders; otherwise set `mpv_path` in the settings file.
-- Python 3.11 or newer (until a packaged build exists)
-- Optional: `pip install tkinterdnd2` to drop files onto a wall that is already open
+1. Download **TesseraWall-setup-x.y.z.exe** from the
+   [latest release](https://github.com/jdotcollins/tessera-wall/releases/latest).
+2. Run it. Windows will probably show a blue **"Windows protected your PC"** box, because the installer
+   is not yet signed by a known publisher. Click **More info**, then **Run anyway**.
+3. Follow the installer. It installs for your user account only and does not ask for administrator
+   rights.
 
-## Install from source
+That is everything: the video player it uses (mpv) is included, and nothing else needs installing.
+Windows 10 or 11, 64-bit. To remove it, use *Settings > Apps > Installed apps* like any other program;
+your settings are kept.
+
+<details>
+<summary>Run from source instead (for developers)</summary>
+
+Needs Python 3.11 or newer and [mpv](https://mpv.io/installation/) installed separately (found on `PATH`
+or in the usual folders; otherwise set `mpv_path` in the settings file). Optional:
+`pip install tkinterdnd2` to drop files onto an open wall.
 
 ```
 git clone https://github.com/jdotcollins/tessera-wall.git
@@ -24,16 +35,17 @@ cd tessera-wall
 powershell -ExecutionPolicy Bypass -File install.ps1
 ```
 
-`install.ps1` adds **Tessera Wall** and **Tessera Wall (random 6)** to Explorer's *Send to* menu and puts a
-shortcut on the Desktop. `install.ps1 -Uninstall` removes them. Nothing is written to the registry.
-Re-run it if you move the folder.
+`install.ps1` adds **Tessera Wall** and **Tessera Wall (random 6)** to Explorer's *Send to* menu and
+puts a shortcut on the Desktop. `install.ps1 -Uninstall` removes them. Re-run it if you move the folder.
+
+</details>
 
 ## Use
 
 - Start Tessera Wall with nothing selected and a small window asks what to play: drop videos or folders on
   it, choose them with a button, or reopen the last session where you left it.
-- Or select videos or a folder in Explorer, right-click, **Send to > Tessera Wall**
-  (on Windows 11: *Show more options* first).
+- Or select videos or a folder in Explorer, right-click, and choose **Play together in Tessera Wall**
+  or **Send to > Tessera Wall** (on Windows 11 both are under *Show more options*).
 - Or drop them on the Desktop shortcut. Doing either while a wall is open adds to it.
 - **Send to > Tessera Wall (random 6)** opens six random videos from the selection.
 - Command line: `pythonw tesserawall.pyw [--random N] [--resume] FILE_OR_FOLDER...`
@@ -88,7 +100,8 @@ releases, not separately.
 
 ## Troubleshooting
 
-- **"mpv was not found"**: install mpv, or set `mpv_path = "C:\\path\\to\\mpv.exe"` in the settings file.
+- **"The video player component (mpv) is missing"**: run the installer again to repair it. If you run
+  from source, install mpv or set `mpv_path = "C:\\path\\to\\mpv.exe"` in the settings file.
 - **Something misbehaves**: the log is `%TEMP%\tesserawall.log`, rewritten each run.
 - **GPU driver timeout or reset popups**: keep `safe_rendering = true` (the default). If they still
   happen, set `anim_ms = 0`, then try `extra_mpv_args = ["--vo=gpu"]`, then `["--hwdec=no"]`.
@@ -98,10 +111,9 @@ releases, not separately.
 
 ## Building the installer
 
-`build.ps1` produces a standalone app (no Python needed) with its own copy of mpv, and a Windows
-installer for it. It needs PyInstaller and Inno Setup 6 (a per-user install is found automatically);
-see the comments at the top of the script. The bundled mpv is a fixed, checksummed build that the
-first run downloads into `downloads\`. The installer has not yet been tried on a clean PC.
+`build.ps1` produces the standalone app (no Python needed) with its pinned copy of mpv, and the Windows
+installer. It needs PyInstaller and Inno Setup 6; see the comments at the top of the script and the
+release checklist in [docs/DEVELOPMENT.md](docs/DEVELOPMENT.md).
 
 ## Development
 
