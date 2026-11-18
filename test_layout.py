@@ -1,7 +1,7 @@
 """Run with: python test_layout.py   (no pytest needed; exits non-zero on failure)"""
 import random
 
-from layout import Rect, arrange, choose, choose_rows, grid, layout, panscan_for
+from layout import Rect, arrange, choose, choose_rows, grid, grid_rows, layout, panscan_for
 
 W, H = 2560, 1440
 
@@ -94,6 +94,15 @@ def test_grid():
     rng = random.Random(4)
     for _ in range(500):
         check_tiling(grid([rng.choice([L, P, 4 / 3, 1.0]) for _ in range(rng.randint(1, 12))], W, H))
+
+
+def test_grid_rows():
+    feature = grid_rows([1, 3], W, H)                # a template's rows, kept as given
+    assert feature[0] == Rect(0, 0, W, H // 2) and [r.y for r in feature[1:]] == [H // 2] * 3
+    assert max(r.w for r in feature[1:]) - min(r.w for r in feature[1:]) <= 1
+    assert grid_rows([2, 2], W, H) == grid([16 / 9] * 4, W, H)
+    for rows in ([1], [4], [3, 3, 3], [1, 4], [2, 5, 1]):
+        check_tiling(grid_rows(rows, W, H))
 
 
 def test_many_videos_fast_and_close_to_exact():

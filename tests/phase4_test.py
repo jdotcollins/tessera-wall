@@ -103,6 +103,7 @@ def main():
     try:
         p = run(base + ["--template", "2x2 landscape", CLIPS])
         r["A_exit"], r["A_added"], r["A_rows"] = p.returncode, added(), last_rows()
+        r["A_flat"] = "template: layout flat" in log_text() and bool(re.search(r"relayout rows=\[2, 2\] focus=\S+ flat", log_text()))
         r["A_probe"] = re.search(r"shape probe: (\d+) files, (\d+) read", log_text())
         r["A_probe"] = r["A_probe"].groups() if r["A_probe"] else None
 
@@ -114,6 +115,9 @@ def main():
         rects = eval(re.findall(r"rects=(\[.*?\]) panscan", log_text())[-1])
         x, y, w, h = rects[0]
         click(x + w // 2, y + h // 2)                   # pin video 0, keyboard to the wall
+        time.sleep(0.5)
+        after = eval(re.findall(r"rects=(\[.*?\]) panscan", log_text())[-1])
+        r["B_focus_moved_nothing"] = after == rects and "focus -> 0" in log_text()
         press(0x4E)                                     # N
         time.sleep(1.0)
         swaps = re.findall(r"file swapped: .*?\\(\w+\.mkv) -> .*?\\(\w+\.mkv)", log_text())
@@ -138,6 +142,16 @@ def main():
             time.sleep(3)
         r["D_chosen"] = bool(re.search(r"template chosen: Feature \+ 3 portrait, 4 videos, rows=\[1, 3\]", log_text()))
         r["D_added"], r["D_rows"] = added(), last_rows()
+        press(0x4C)                                     # L: flat -> even grid, within the template's rows
+        time.sleep(0.6)
+        grid_line = re.findall(r"relayout rows=\[1, 3\] focus=\S+ grid rects=(\[.*?\]) panscan", log_text())
+        if grid_line:
+            g = eval(grid_line[-1])
+            sw, sh = g[0][2], g[0][3] * 2
+            r["D_grid"] = (g[0][:2] == (0, 0) and all(c[1] == sh // 2 for c in g[1:])
+                           and max(c[2] for c in g[1:]) - min(c[2] for c in g[1:]) <= 1 and sum(c[2] for c in g[1:]) == sw)
+        else:
+            r["D_grid"] = False
         r["D_exit"] = p.wait(30)
 
         p = run(base + ["--template", "3x3 landscape", CLIPS])
@@ -184,6 +198,9 @@ def main():
     port = lambda names: all(n.startswith("port") for n in names)
     assert r["A_exit"] == 0 and len(r["A_added"]) == 4 and land(r["A_added"]) and r["A_rows"] == "[2, 2]"
     assert r["A_probe"] == ("15", "15"), "the whole folder was read once"
+    assert r["A_flat"], "a template wall starts without growth on hover"
+    assert r["B_focus_moved_nothing"], "pointing at / pinning a video must not change the template's rects"
+    assert r["D_grid"], "L to even grid keeps the template's rows: one full-width cell, then three equal ones"
     assert len(r["B_added"]) == 4 and port(r["B_added"]) and r["B_rows"] == "[4]" and r["B_cached"]
     assert r["B_swap"] and r["B_swap"][1].startswith("port") and r["B_swap"][1] not in r["B_added"], r["B_swap"]
     assert r["B_exit"] == 0

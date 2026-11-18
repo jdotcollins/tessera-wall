@@ -271,7 +271,11 @@ folder on the development PC still has the old name; nothing depends on it.
     normalised path, checked against size and mtime; files mpv skips are cached as `None`. A batch that
     takes longer than 10 s + 1 s per file is stopped, and its unread files are not cached.
   - Wall: `Wall.template_rows` replaces `arrange()` while the tile count equals the template's (adding or
-    closing a video returns to normal layout), keeping the template's order. `Wall.shape_of` (normalised
+    closing a video returns to normal layout), keeping the template's order. A complete template wall
+    starts in `flat` mode instead of `grow` (main), so pointing at a video changes sound, dimming and the
+    outline but not the arrangement; L still cycles. In `grid` mode a template wall uses
+    `layout.grid_rows(template_rows)` (equal cells within its rows) rather than `grid()`, which would
+    choose its own columns and break a mixed template. `Wall.shape_of` (normalised
     path -> group ratio) makes `swap_random` (N) choose only cached files of that ratio.
   - When a video ends (`when_finished`, `E`, Settings): `loop` keeps `--loop-file=inf`; `next` /
     `random` start players with `--loop-file=no` (changed live with `set loop-file`), so with

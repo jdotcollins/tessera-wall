@@ -290,6 +290,18 @@ def grid(aspects: list[float], W: int, H: int) -> list[Rect]:
     return best[1]
 
 
+def grid_rows(rows: list[int], W: int, H: int) -> list[Rect]:
+    """Even grid for given rows (a template's): every row the same height, every cell in a row the
+    same width. Order is row by row; the screen is covered exactly."""
+    out = []
+    for r, k in enumerate(rows):
+        y0, y1 = round(H * r / len(rows)), round(H * (r + 1) / len(rows))
+        for q in range(k):
+            x0, x1 = round(W * q / k), round(W * (q + 1) / k)
+            out.append(Rect(x0, y0, x1 - x0, y1 - y0))
+    return out
+
+
 def panscan_for(cell_w: int, cell_h: int, aspect: float, max_crop: float = 0.10) -> float:
     """mpv `panscan` value (0..1) that crops at most max_crop of the video's long-overflow axis.
 

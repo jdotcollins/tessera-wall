@@ -20,6 +20,7 @@ from ipc import MpvIpc
 from layout import Rect
 from layout import arrange
 from layout import grid
+from layout import grid_rows
 from layout import layout
 from layout import panscan_for
 import config as C
@@ -317,7 +318,10 @@ class Wall:
         zoomed = self.zoom and f is not None
         # Zoom = same reflow with "grow as far as allowed" and a much smaller floor for the others.
         scale, shrink = (100.0, C.ZOOM_MIN_SHRINK) if zoomed else (C.FOCUS_SCALE, C.MIN_SHRINK)
-        if self.layout_mode == "grid" and not zoomed:
+        templated = bool(self.template_rows) and self.rows == self.template_rows and not self.columns
+        if self.layout_mode == "grid" and not zoomed and templated:
+            rects = grid_rows(self.rows, self.W, self.H)      # equal cells within the template's rows
+        elif self.layout_mode == "grid" and not zoomed:
             rects = grid(aspects, self.W, self.H)            # identical cells; hover moves nothing
         else:
             grow = zoomed or self.layout_mode == "grow"       # "flat": best-fit layout, no growth on hover

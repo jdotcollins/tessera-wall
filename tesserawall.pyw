@@ -201,6 +201,11 @@ def main():
     if plan:
         wall.template_rows = plan.rows
         wall.shape_of = {os.path.normcase(p): r for p, r in plan.shape_of.items()}
+        if plan.rows and wall.layout_mode == "grow":
+            # A template is an exact arrangement: pointing at a video must not grow it out of the rows.
+            # Sound, dimming and the outline still follow the pointer; L brings growth back.
+            wall.layout_mode = "flat"
+            log.info("template: layout flat (no growth on hover)")
     # Test runs (--exit-after) must not overwrite the real session unless a file is named explicitly.
     wall.session_path = None if (ns.exit_after > 0 and not ns.session) else session_path
     wall.bind_keys()

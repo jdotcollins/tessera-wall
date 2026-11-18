@@ -64,6 +64,8 @@ for a large folder; after that it remembers.
 - Built in: 2×2, 3×3 and 4×4 landscape; 3 or 4 portrait in a row; 2 square side by side; one landscape
   above three portrait.
 - If the folder does not have enough matching videos, the wall opens what it found and says so.
+- A template wall keeps its arrangement: pointing at a video brings its sound and outline but does not
+  enlarge it (press **L** for *Grow on hover* if you want that).
 - **N** in a template wall swaps in another random video *of the same shape*, so the rows keep fitting.
 - For an endless random wall, set *When a video ends* to *Random from folder* in Settings (or press
   **E** in the wall): each video that finishes is replaced by another of the same shape.
