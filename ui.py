@@ -117,6 +117,8 @@ SETTINGS_UI = [
     ("section", "Layout"),
     ("choice", "LAYOUT_MODE", "Arrangement", [("grow", "Grow on hover"), ("flat", "Best fit"), ("grid", "Even grid")]),
     ("choice", "CROP_MODE", "Black bars", [("limited", "Crop a little"), ("fill", "Crop to fill"), ("fit", "Never crop")]),
+    ("choice", "WHEN_FINISHED", "When a video ends", [("loop", "Play it again"), ("next", "Next in folder"),
+                                                      ("random", "Random from folder")]),
     ("section", "Other"),
     ("check", "FOCUS_OUTLINE", "Outline the video you point at"),
     ("check", "SEEKBAR_SHOW_NAME", "Show the file name on the video you point at"),

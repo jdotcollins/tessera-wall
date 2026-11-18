@@ -10,6 +10,9 @@ Makes a folder of small H.264 clips once (%TEMP%\\tesserawall-p4-clips): 6 x 16:
      one 16:9 video above three portrait ones
   E. --template "3x3 landscape" with only 6 x 16:9: opens 6, says so, rows not forced
   F. --template "nope": nothing opens, exit 0
+  G. when_finished = "random" in that 2x2 wall: videos that end are replaced by other 16:9 videos (or
+     played again when none is free); rows stay [2, 2]
+  H. one video with the default "loop"; E switches to "next"; when it ends land1 follows land0
 """
 import ctypes
 import os
@@ -144,6 +147,32 @@ def main():
         p = run(base + ["--template", "nope", CLIPS])
         r["F_exit"], r["F_added"] = p.returncode, added()
         r["F_logged"] = "There is no template called" in log_text()
+
+        # G. when_finished = "random" in a 2x2 template wall: ended videos are replaced by other 16:9 ones
+        cfg_random = os.path.join(tmp, "random", "config.toml")
+        os.makedirs(os.path.dirname(cfg_random))
+        with open(cfg_random, "w") as f:
+            f.write('when_finished = "random"\n')
+        p = run(["--config", cfg_random, "--session", os.path.join(tmp, "s2.json"),
+                 "--template", "2x2 landscape", CLIPS], exit_after=15)
+        text = log_text()
+        r["G_finished"] = text.count("finished (random)")
+        r["G_swapped_to"] = [os.path.basename(m) for m in re.findall(r"file swapped: .* -> (.*)", text)]
+        r["G_rows"], r["G_exit"] = last_rows(), p.returncode
+        r["G_removed"] = text.count("tile removed")
+
+        # H. one video, default "loop"; E switches to "next"; when it ends the next file plays
+        p = run(base + [os.path.join(CLIPS, "land0.mkv")], wait=False, exit_after=14)
+        procs.append(p)
+        time.sleep(2.5)
+        rects = eval(re.findall(r"rects=(\[.*?\]) panscan", log_text())[-1])
+        x, y, w, h = rects[0]
+        click(x + w // 2, y + h // 2)
+        press(0x45)                                     # E
+        r["H_mode"] = "when finished -> next" in log_text()
+        r["H_exit"] = p.wait(30)
+        swaps = re.findall(r"file swapped: .*?\\(\w+\.mkv) -> .*?\\(\w+\.mkv)", log_text())
+        r["H_swaps"] = swaps
     finally:
         user32.SetCursorPos(orig.x, orig.y)
         for q in procs:
@@ -163,6 +192,9 @@ def main():
     assert r["D_added"][0].startswith("land") and port(r["D_added"][1:]) and r["D_rows"] == "[1, 3]"
     assert len(r["E_added"]) == 6 and land(r["E_added"]) and r["E_message"] and not r["E_forced"]
     assert r["F_exit"] == 0 and not r["F_added"] and r["F_logged"]
+    assert r["G_finished"] >= 4 and r["G_swapped_to"] and land(r["G_swapped_to"]), "ended videos replaced, 16:9 only"
+    assert r["G_rows"] == "[2, 2]" and r["G_exit"] == 0 and not r["G_removed"]
+    assert r["H_mode"] and r["H_swaps"] and r["H_swaps"][0] == ("land0.mkv", "land1.mkv") and r["H_exit"] == 0
     print("PHASE4 TEST PASSED")
 
 

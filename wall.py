@@ -63,6 +63,7 @@ HELP_SECTIONS = [
         (["R"], "Restart all from the beginning"),
         (["Page Down", "Page Up"], "Next / previous file from its folder"),
         (["N"], "Swap for a random file from its folder"),
+        (["E"], "When a video ends: play again, next file, random file"),
         (["G"], "Sync: every video follows the focused one (again to stop)"),
         (["[", "]"], "Slower / faster (Backspace: normal speed)"),
         ([",", "."], "Step one frame back / forward"),
@@ -86,6 +87,8 @@ HELP_COLUMNS = (("Mouse", "Layout"), ("Playback", "App"))
 
 LAYOUT_MODES = ("grow", "flat", "grid")
 CROP_MODES = ("limited", "fill", "fit")
+END_MODES = ("loop", "next", "random")
+END_LABELS = {"loop": "play it again", "next": "next file in its folder", "random": "random file from its folder"}
 CONNECT_TIMEOUT = 15.0   # seconds for mpv to create its IPC pipe
 ASPECT_TIMEOUT = 10.0    # seconds to wait for a video size before keeping the 16:9 guess
 
@@ -179,6 +182,7 @@ class Wall:
         self.update_shown = False
         self.layout_mode = C.LAYOUT_MODE if C.LAYOUT_MODE in LAYOUT_MODES else "grow"
         self.crop_mode = C.CROP_MODE if C.CROP_MODE in CROP_MODES else "limited"
+        self.end_mode = C.WHEN_FINISHED if C.WHEN_FINISHED in END_MODES else "loop"
         log.info("start W=%d H=%d", self.W, self.H)
 
     @property
@@ -225,7 +229,7 @@ class Wall:
         pipe = rf"\\.\pipe\tesserawall-{os.getpid()}-{self.counter}"
         args = [self.mpv, f"--wid={frame.winfo_id()}", f"--input-ipc-server={pipe}",
                 "--mute=yes", "--osc=no", "--input-default-bindings=no", "--input-vo-keyboard=no",
-                "--input-cursor=no", "--cursor-autohide=no", "--loop-file=inf", "--keep-open=yes",
+                "--input-cursor=no", "--cursor-autohide=no", f"--loop-file={self.loop_file()}", "--keep-open=yes",
                 "--force-window=yes", "--no-terminal", "--hwdec=auto-safe", "--panscan=0"]
         osd = max(16, self.H // 60)                     # 24 px on a 1440p screen, whatever the tile size
         args += ["--osd-scale-by-window=no", f"--osd-font-size={osd}", "--osd-font=Segoe UI",
@@ -522,53 +526,94 @@ class Wall:
                 t.ipc.set_async("volume", t.volume)
             t.ipc.post("show-text", f"Volume: {t.volume:.0f}%")
 
-    def swap_random(self):
-        """Replace the focused video with a random other video from the same folder."""
-        t = self.focus
-        if not t or not t.ipc or "://" in t.path:
-            return
-        open_now = {os.path.normcase(x.path) for x in self.tiles}
-        pool = [p for p in expand([os.path.dirname(t.path)]) if os.path.normcase(p) not in open_now]
-        shape = self.shape_of.get(os.path.normcase(t.path))
-        if shape and pool:   # opened by a template: stay within its shape so the rows keep fitting
-            known = probe.cached(pool, probe.cache_path_for(self.config_path))
-            pool = [p for p in pool if known.get(p) and
-                    abs(math.log(known[p] / shape)) <= math.log(1 + templates.TOLERANCE)]
-        if not pool:
-            t.ipc.post("show-text", "No other videos of this shape in this folder" if shape
-                       else "No other videos in this folder")
-            return
-        new = random.choice(pool)
-        if shape:
-            self.shape_of[os.path.normcase(new)] = shape
-        self.load_into(t, new)
-
-    def step_file(self, direction: int):
-        """Page Down / Page Up: load the next / previous video from the focused tile's folder.
-
-        Order is the folder's name order (same as opening the folder), wrapping at the ends and
-        skipping files that another tile is already showing.
-        """
-        t = self.focus
-        if not t or not t.ipc or "://" in t.path:
-            return
+    def pick_file(self, t: Tile, how: str) -> str | None:
+        """Another video from t's folder: "next" / "prev" in the folder's name order (wrapping), or
+        "random". Files another tile shows are skipped. In a template wall only files of the tile's
+        shape count (from the shape cache), so the rows keep fitting. None if there is no other."""
+        if "://" in t.path:
+            return None
         files = expand([os.path.dirname(t.path)])
+        shape = self.shape_of.get(os.path.normcase(t.path))
+        if shape:
+            known = probe.cached(files, probe.cache_path_for(self.config_path))
+            files = [p for p in files if os.path.normcase(p) == os.path.normcase(t.path) or (
+                known.get(p) and abs(math.log(known[p] / shape)) <= math.log(1 + templates.TOLERANCE))]
         names = [os.path.normcase(f) for f in files]
-        current = os.path.normcase(t.path)
         taken = {os.path.normcase(x.path) for x in self.tiles}
+        if how == "random":
+            pool = [f for f, n in zip(files, names) if n not in taken]
+            return random.choice(pool) if pool else None
+        direction = 1 if how == "next" else -1
+        current = os.path.normcase(t.path)
         # A file opened explicitly may not be a listed video type: start just outside the list.
         i = names.index(current) if current in names else (-1 if direction > 0 else 0)
         for k in range(1, len(files) + 1):
             j = (i + direction * k) % len(files)
             if names[j] not in taken:
-                return self.load_into(t, files[j])
-        t.ipc.post("show-text", "No other videos in this folder")
+                return files[j]
+        return None
 
-    def load_into(self, t: Tile, new: str):
+    def no_other_message(self, t: Tile) -> str:
+        return ("No other videos of this shape in this folder" if os.path.normcase(t.path) in self.shape_of
+                else "No other videos in this folder")
+
+    def swap_random(self):
+        """N: replace the focused video with a random other video from the same folder."""
+        t = self.focus
+        if not t or not t.ipc or "://" in t.path:
+            return
+        new = self.pick_file(t, "random")
+        if new:
+            self.load_into(t, new)
+        else:
+            t.ipc.post("show-text", self.no_other_message(t))
+
+    def step_file(self, direction: int):
+        """Page Down / Page Up: load the next / previous video from the focused tile's folder, in the
+        folder's name order (same as opening the folder), wrapping at the ends."""
+        t = self.focus
+        if not t or not t.ipc or "://" in t.path:
+            return
+        new = self.pick_file(t, "next" if direction > 0 else "prev")
+        if new:
+            self.load_into(t, new)
+        else:
+            t.ipc.post("show-text", self.no_other_message(t))
+
+    def advance(self, t: Tile):
+        """A video ended with "when finished" set to next or random: load that file and play it. With no
+        other file to go to, play the same one again."""
+        new = self.pick_file(t, self.end_mode)
+        log.info("finished (%s): %s", self.end_mode, t.path)
+        if new:
+            self.load_into(t, new, announce=t is self.focus)
+        else:
+            t.swap_seq = t.ipc.seq                 # this end has been handled
+            t.ipc.post("seek", 0, "absolute")
+        t.ipc.set_async("pause", False)            # keep-open paused it on its last frame
+
+    def loop_file(self) -> str:
+        return "inf" if self.end_mode == "loop" else "no"
+
+    def cycle_end_mode(self, to: str | None = None):
+        """E (or the Settings window): what videos do when they end. Applies to the open players at once."""
+        self.end_mode = to or END_MODES[(END_MODES.index(self.end_mode) + 1) % len(END_MODES)]
+        log.info("when finished -> %s", self.end_mode)
+        for t in self.tiles:
+            if t.ipc:
+                t.ipc.set_async("loop-file", self.loop_file())
+                if to is None:
+                    t.ipc.post("show-text", f"When a video ends: {END_LABELS[self.end_mode]}", 2000)
+
+    def load_into(self, t: Tile, new: str, announce: bool = True):
         log.info("file swapped: %s -> %s", t.path, new)
+        old = self.shape_of.get(os.path.normcase(t.path))
+        if old:
+            self.shape_of[os.path.normcase(new)] = old
         t.swap_seq = t.ipc.seq
         t.ipc.post("loadfile", new, "replace")
-        t.ipc.post("show-text", os.path.basename(new), 2500)
+        if announce:
+            t.ipc.post("show-text", os.path.basename(new), 2500)
         t.path, t.swapped, t.aspect_known, t.born = new, True, False, time.monotonic()
         self.bar_next = 0.0
 
@@ -762,6 +807,8 @@ class Wall:
     def apply_settings(self, names):
         """A setting was changed in the settings window: take it up now, without on-screen messages."""
         self.reload_config(quiet=True)
+        if "WHEN_FINISHED" in names and C.WHEN_FINISHED in END_MODES:
+            self.cycle_end_mode(C.WHEN_FINISHED)
         if "LAYOUT_MODE" in names or "CROP_MODE" in names:   # these are otherwise only starting values
             self.layout_mode = C.LAYOUT_MODE if C.LAYOUT_MODE in LAYOUT_MODES else self.layout_mode
             self.crop_mode = C.CROP_MODE if C.CROP_MODE in CROP_MODES else self.crop_mode
@@ -866,7 +913,7 @@ class Wall:
                     # wall needs are pushed by mpv instead of asked for (see ipc.MpvIpc).
                     t.ipc = MpvIpc(t.pipe, timeout=0, handshake=False)
                     t.ipc.observe("idle-active", "dwidth", "dheight", "video-params", "percent-pos",
-                                  "time-pos", "duration", "pause")
+                                  "time-pos", "duration", "pause", "eof-reached")
                     self.need_layout = True  # so panscan gets sent
                     if not self.hint_shown and (self.notice or C.SHOW_HELP_HINT):
                         self.hint_shown = True   # a startup problem with the settings file wins over the hint
@@ -874,6 +921,9 @@ class Wall:
                 except OSError:
                     if now - t.born > CONNECT_TIMEOUT:
                         self.remove(t, "no IPC connection")
+            elif t.aspect_known and self.end_mode != "loop" and t.ipc.value("eof-reached") \
+                    and t.ipc.value_seq("eof-reached") > t.swap_seq:
+                self.advance(t)          # it ended (keep-open paused it on its last frame): next / random file
             elif not t.aspect_known:
                 # A file mpv cannot open leaves the player idle with an empty window (it does not exit,
                 # because of --force-window). Seen twice, 0.6 s apart, so a brief idle moment while a
@@ -1162,6 +1212,7 @@ class Wall:
         b("<Up>", lambda e: self.change_volume(C.VOLUME_STEP))
         b("<Down>", lambda e: self.change_volume(-C.VOLUME_STEP))
         b("<n>", lambda e: self.swap_random())
+        b("<e>", lambda e: self.cycle_end_mode())
         b("<bracketleft>", lambda e: self.change_speed(1 / 1.1))
         b("<bracketright>", lambda e: self.change_speed(1.1))
         b("<BackSpace>", lambda e: self.change_speed(None))

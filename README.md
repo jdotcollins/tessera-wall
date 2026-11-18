@@ -65,6 +65,8 @@ for a large folder; after that it remembers.
   above three portrait.
 - If the folder does not have enough matching videos, the wall opens what it found and says so.
 - **N** in a template wall swaps in another random video *of the same shape*, so the rows keep fitting.
+- For an endless random wall, set *When a video ends* to *Random from folder* in Settings (or press
+  **E** in the wall): each video that finishes is replaced by another of the same shape.
 
 Your own templates go in `%APPDATA%\TesseraWall\templates.toml` (created with an example). Each row lists
 the shape of each slot, `landscape`, `portrait`, `square`, `any` or an exact ratio such as `"16:9"` or
@@ -99,6 +101,7 @@ of the whole PC slowing to a crawl.
 | `Up` `Down` | Volume of the focused video (remembered per video) |
 | `Page Down` / `Page Up` | Next / previous file from the focused video's folder |
 | `N` | Swap the focused video for a random one from its folder (same shape, in a template wall) |
+| `E` | When a video ends: play it again, play the next file in its folder, or a random one |
 | `G` | Sync: every video follows the focused one (pause, seek, speed, frame steps); again to stop |
 | `[` `]` / `Backspace` | Slower / faster; back to normal speed |
 | `,` `.` | Step one frame back / forward |

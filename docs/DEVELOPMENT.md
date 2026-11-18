@@ -273,6 +273,12 @@ folder on the development PC still has the old name; nothing depends on it.
   - Wall: `Wall.template_rows` replaces `arrange()` while the tile count equals the template's (adding or
     closing a video returns to normal layout), keeping the template's order. `Wall.shape_of` (normalised
     path -> group ratio) makes `swap_random` (N) choose only cached files of that ratio.
+  - When a video ends (`when_finished`, `E`, Settings): `loop` keeps `--loop-file=inf`; `next` /
+    `random` start players with `--loop-file=no` (changed live with `set loop-file`), so with
+    `--keep-open=yes` mpv pauses on the last frame and pushes `eof-reached=true`. `tick` sees it (newer
+    than the tile's `swap_seq`, file fully loaded) and calls `Wall.advance`: `pick_file` (shared with
+    Page Down/Up and N; shape-filtered in a template wall), `load_into` without the file-name text on
+    unfocused tiles, then unpause. No other file free: seek to 0 and play again.
   - Entry points: `--template NAME` (or `best`) plans without asking; `--choose-template` shows
     `ui.template_window` (Explorer's folder verb `tesserawall-template`); the start window's "Use a
     template…" opens it modally after a folder dialog. With a wall already open, the new process claims
@@ -351,7 +357,7 @@ python tests/smoke.py           # every test below takes over the screen, mouse 
 python tests/freeze_test.py     # a suspended player must not stall the wall
 python tests/phase2_test.py     # speed, frame step, A-B loop, tracks, snapshot, crash restart
 python tests/phase3_test.py     # memory guard, Tab focus, sync, Ctrl+S save, saved-wall button
-python tests/phase4_test.py     # templates: CLI, Best fit, chooser window, N within shape, short folder
+python tests/phase4_test.py     # templates: CLI, Best fit, chooser, N within shape, short folder, when finished
 python tests/add_test.py
 python tests/drop_test.py       # needs tkinterdnd2
 python tests/features_test.py   # writes a 26 MB clip to %TEMP% on first run; other tests reuse it
