@@ -119,6 +119,9 @@ SETTINGS_UI = [
     ("choice", "CROP_MODE", "Black bars", [("limited", "Crop a little"), ("fill", "Crop to fill"), ("fit", "Never crop")]),
     ("choice", "WHEN_FINISHED", "When a video ends", [("loop", "Play it again"), ("next", "Next in folder"),
                                                       ("random", "Random from folder")]),
+    ("choice", "SWITCH_SECONDS", "Move on", [(0, "Never"), (30, "After 30 s"), (60, "After 1 min"),
+                                             (120, "After 2 min")]),
+    ("check", "RANDOM_START", "Start videos at a random point"),
     ("section", "Other"),
     ("check", "FOCUS_OUTLINE", "Outline the video you point at"),
     ("check", "SEEKBAR_SHOW_NAME", "Show the file name on the video you point at"),
@@ -127,6 +130,14 @@ SETTINGS_UI = [
     ("check", "UPDATE_CHECK", "Check for a new version once a week"),
     ("check", "SAFE_RENDERING", "Compatibility mode (recommended; applies to videos opened next)"),
 ]
+
+
+def typed(name: str, value: str):
+    """A choice's value comes back from tk as text; give whole-number settings their number back."""
+    default = C.DEFAULTS[name]
+    if isinstance(default, int) and not isinstance(default, bool):
+        return int(value)
+    return value
 
 
 def settings_window(parent, config_path: str, apply, on_close, topmost: bool = False) -> tk.Toplevel:
@@ -225,7 +236,7 @@ def settings_window(parent, config_path: str, apply, on_close, topmost: bool = F
                 b = tk.Radiobutton(row, text=text, value=value, variable=var, indicatoron=False, font=font(0.95),
                                    bg=panel, fg=fg, selectcolor=accent, activebackground="#2A3038",
                                    activeforeground=fg, relief="flat", bd=0, padx=u, pady=u // 3, cursor="hand2",
-                                   command=lambda n=name, v=var: change(n, v.get()))
+                                   command=lambda n=name, v=var: change(n, typed(n, v.get())))
                 b.pack(side="left", padx=(0, u // 3))
                 hover(b, panel, "#2A3038")                 # the selected one shows its blue select colour
                 located[f"{name}:{value}"] = group[value] = b

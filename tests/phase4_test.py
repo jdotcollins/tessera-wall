@@ -13,6 +13,8 @@ Makes a folder of small H.264 clips once (%TEMP%\\tesserawall-p4-clips): 6 x 16:
   G. when_finished = "random" in that 2x2 wall: videos that end are replaced by other 16:9 videos (or
      played again when none is free); rows stay [2, 2]
   H. one video with the default "loop"; E switches to "next"; when it ends land1 follows land0
+  I. switch_seconds = 4, random_start: videos move on (16:9 only) and start at random points; the
+     pinned video stays
 """
 import ctypes
 import os
@@ -187,6 +189,32 @@ def main():
         r["H_exit"] = p.wait(30)
         swaps = re.findall(r"file swapped: .*?\\(\w+\.mkv) -> .*?\\(\w+\.mkv)", log_text())
         r["H_swaps"] = swaps
+
+        # I. switch_seconds = 4 and random_start in a 2x2 wall: videos move on (16:9 only), start at random
+        #    points, and the pinned (focused) video is never moved on
+        cfg_switch = os.path.join(tmp, "switch", "config.toml")
+        os.makedirs(os.path.dirname(cfg_switch))
+        with open(cfg_switch, "w") as f:
+            f.write("switch_seconds = 4\nrandom_start = true\n")
+        p = run(["--config", cfg_switch, "--session", os.path.join(tmp, "s3.json"),
+                 "--template", "2x2 landscape", CLIPS], wait=False, exit_after=13)
+        procs.append(p)
+        time.sleep(2.0)
+        lines = re.findall(r"rects=(\[.*?\]) panscan", log_text())
+        pinned = None
+        if lines:
+            x, y, w, h = eval(lines[-1])[0]
+            click(x + w // 2, y + h // 2)
+            first = re.findall(r"tile added #\d+ pipe=\S+ path=(.*)", log_text())
+            pinned = first[0] if first else None
+        r["I_exit"] = p.wait(30)
+        text = log_text()
+        moved = re.findall(r"moved on after 4s: (.*)", text)
+        r["I_moved"] = len(moved)
+        r["I_pinned_moved"] = bool(pinned) and any(m.strip() == pinned.strip() for m in moved)
+        r["I_swapped_to"] = [os.path.basename(m) for m in re.findall(r"file swapped: .* -> (.*)", text)]
+        r["I_random_starts"] = len(re.findall(r"random start (\d+)%", text))
+        r["I_rows"] = last_rows()
     finally:
         user32.SetCursorPos(orig.x, orig.y)
         for q in procs:
@@ -212,6 +240,10 @@ def main():
     assert r["G_finished"] >= 4 and r["G_swapped_to"] and land(r["G_swapped_to"]), "ended videos replaced, 16:9 only"
     assert r["G_rows"] == "[2, 2]" and r["G_exit"] == 0 and not r["G_removed"]
     assert r["H_mode"] and r["H_swaps"] and r["H_swaps"][0] == ("land0.mkv", "land1.mkv") and r["H_exit"] == 0
+    assert r["I_exit"] == 0 and r["I_moved"] >= 2 and land(r["I_swapped_to"]), "videos move on, 16:9 only"
+    assert not r["I_pinned_moved"], "the pinned video is never moved on"
+    assert r["I_random_starts"] >= 4 + r["I_moved"], "every video (first and replacements) starts at random"
+    assert r["I_rows"] == "[2, 2]"
     print("PHASE4 TEST PASSED")
 
 

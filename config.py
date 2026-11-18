@@ -68,6 +68,12 @@ SETTINGS = [
     ("controls", "WHEN_FINISHED", "loop",
      'What a video does when it ends: "loop" (play it again), "next" (the next file in its folder) or\n'
      '"random" (a random file from its folder). E in the wall switches between them.'),
+    ("controls", "SWITCH_SECONDS", 0,
+     "Move each video on to another file after about this many seconds (0 = never): the next or a random\n"
+     "file, as set by when_finished (random if that is \"loop\"). The video you point at stays. Ctrl+E cycles."),
+    ("controls", "RANDOM_START", False,
+     "Start each video at a random point (5-80 % through) instead of the beginning. Saved walls and\n"
+     "sessions still reopen where they were."),
     ("controls", "HELP_OPACITY", 0.94, "Controls list (H): 1 = solid, lower lets the videos show through."),
     ("controls", "SNAPSHOT_DIR", "", 'Folder for snapshots (P). Empty = "Tessera Wall" in your Pictures folder.'),
     ("controls", "SHOW_HELP_HINT", True, 'Show "Press H for controls" briefly at launch.'),

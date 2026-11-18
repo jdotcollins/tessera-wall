@@ -283,6 +283,14 @@ folder on the development PC still has the old name; nothing depends on it.
     than the tile's `swap_seq`, file fully loaded) and calls `Wall.advance`: `pick_file` (shared with
     Page Down/Up and N; shape-filtered in a template wall), `load_into` without the file-name text on
     unfocused tiles, then unpause. No other file free: seek to 0 and play again.
+  - Move on (`switch_seconds`, Ctrl+E, Settings) and random start (`random_start`): every tile gets a
+    `switch_due` time (switch_seconds ±25 %, so the wall does not change all at once) when added and on
+    every `load_into`; `tick` calls `Wall.timed_switch`, which skips the focused tile and sync mode
+    (re-checked 5 s later) and otherwise loads `pick_file(next | random)`. Random start: `--start=N%`
+    for new players, `loadfile <file> replace -1 start=N%` for swaps (the index argument exists since
+    mpv 0.38; checked on the bundled 0.42), N in 5..80; restarts, saved walls and sessions keep their
+    positions. Ctrl+E rather than Shift+E: the wall binds the upper-case letter as the Caps Lock twin.
+    Settings choices come back from tk as text; `ui.typed` turns them back into numbers.
   - Entry points: `--template NAME` (or `best`) plans without asking; `--choose-template` shows
     `ui.template_window` (Explorer's folder verb `tesserawall-template`); the start window's "Use a
     template…" opens it modally after a folder dialog. With a wall already open, the new process claims

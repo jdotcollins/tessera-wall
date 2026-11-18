@@ -65,6 +65,7 @@ HELP_SECTIONS = [
         (["Page Down", "Page Up"], "Next / previous file from its folder"),
         (["N"], "Swap for a random file from its folder"),
         (["E"], "When a video ends: play again, next file, random file"),
+        (["Ctrl+E"], "Move on to another file every 30 s / 1 min / 2 min / never"),
         (["G"], "Sync: every video follows the focused one (again to stop)"),
         (["[", "]"], "Slower / faster (Backspace: normal speed)"),
         ([",", "."], "Step one frame back / forward"),
@@ -118,6 +119,7 @@ class Tile:
     swap_seq: int = 0            # ipc.seq when the replacement was requested; only newer news counts
     restarts: list = field(default_factory=list)   # times this tile's player was restarted after a crash
     size: tuple | None = None    # video width, height once known (for the memory estimate)
+    switch_due: float | None = None   # when "move on" replaces this video (None: not timed)
 
 
 def fmt_time(s: float) -> str:
@@ -184,6 +186,7 @@ class Wall:
         self.layout_mode = C.LAYOUT_MODE if C.LAYOUT_MODE in LAYOUT_MODES else "grow"
         self.crop_mode = C.CROP_MODE if C.CROP_MODE in CROP_MODES else "limited"
         self.end_mode = C.WHEN_FINISHED if C.WHEN_FINISHED in END_MODES else "loop"
+        self.switch_seconds = max(0, C.SWITCH_SECONDS)
         log.info("start W=%d H=%d", self.W, self.H)
 
     @property
@@ -221,6 +224,7 @@ class Wall:
             return
         proc, pipe = started
         self.tiles.append(Tile(path, frame, proc, pipe, time.monotonic()))
+        self.schedule_switch(self.tiles[-1])
         self.need_layout = True
         log.info("tile added #%d pipe=%s path=%s", self.counter, pipe, path)
 
@@ -242,6 +246,10 @@ class Wall:
             args.append("--no-config")
         if start and start > 1:
             args.append(f"--start={start:.1f}")
+        elif C.RANDOM_START and "://" not in path:
+            pct = random.randint(5, 80)
+            args.append(f"--start={pct}%")
+            log.info("random start %d%%: %s", pct, path)
         if C.SAFE_RENDERING and os.environ.get("TESSERAWALL_UNSAFE_RENDERING") != "1":
             # Many HDR flip-model swapchains being resized at once makes the AMD driver time out.
             args += ["--d3d11-flip=no", "--target-colorspace-hint=no",
@@ -596,6 +604,42 @@ class Wall:
             t.ipc.post("seek", 0, "absolute")
         t.ipc.set_async("pause", False)            # keep-open paused it on its last frame
 
+    SWITCH_STEPS = (0, 30, 60, 120)
+
+    def schedule_switch(self, t: Tile, now: float | None = None):
+        """Set when "move on" replaces t: about switch_seconds from now, +-25 % so the wall does not
+        change all at once."""
+        now = time.monotonic() if now is None else now
+        t.switch_due = now + self.switch_seconds * random.uniform(0.75, 1.25) if self.switch_seconds else None
+
+    def timed_switch(self, t: Tile, now: float):
+        """t's time is up: load the next or a random file (as when_finished says; random if that is loop).
+        Not the video being pointed at, and not in sync mode: those get checked again a little later."""
+        if t is self.focus or self.sync or not t.ipc:
+            t.switch_due = now + 5
+            return
+        new = self.pick_file(t, self.end_mode if self.end_mode != "loop" else "random")
+        if new:
+            log.info("moved on after %ds: %s", self.switch_seconds, t.path)
+            self.load_into(t, new, announce=False)
+        else:
+            self.schedule_switch(t, now)
+
+    def cycle_switch(self, to: int | None = None):
+        """Ctrl+E (or the Settings window): how often videos move on. Restarts every video's timer."""
+        if to is None:
+            steps = self.SWITCH_STEPS
+            to = steps[(steps.index(self.switch_seconds) + 1) % len(steps)] if self.switch_seconds in steps else 0
+        self.switch_seconds = max(0, to)
+        log.info("move on -> %s", self.switch_seconds or "never")
+        now = time.monotonic()
+        for t in self.tiles:
+            self.schedule_switch(t, now)
+        target = self.focus or (self.tiles[0] if self.tiles else None)
+        if target and target.ipc:
+            target.ipc.post("show-text", f"Move on: after {self.switch_seconds} s" if self.switch_seconds
+                            else "Move on: never", 2000)
+
     def loop_file(self) -> str:
         return "inf" if self.end_mode == "loop" else "no"
 
@@ -615,7 +659,13 @@ class Wall:
         if old:
             self.shape_of[os.path.normcase(new)] = old
         t.swap_seq = t.ipc.seq
-        t.ipc.post("loadfile", new, "replace")
+        if C.RANDOM_START and "://" not in new:      # index -1: append position unused with "replace"
+            pct = random.randint(5, 80)
+            t.ipc.post("loadfile", new, "replace", "-1", f"start={pct}%")
+            log.info("random start %d%%: %s", pct, new)
+        else:
+            t.ipc.post("loadfile", new, "replace")
+        self.schedule_switch(t)
         if announce:
             t.ipc.post("show-text", os.path.basename(new), 2500)
         t.path, t.swapped, t.aspect_known, t.born = new, True, False, time.monotonic()
@@ -813,6 +863,8 @@ class Wall:
         self.reload_config(quiet=True)
         if "WHEN_FINISHED" in names and C.WHEN_FINISHED in END_MODES:
             self.cycle_end_mode(C.WHEN_FINISHED)
+        if "SWITCH_SECONDS" in names:
+            self.cycle_switch(C.SWITCH_SECONDS)
         if "LAYOUT_MODE" in names or "CROP_MODE" in names:   # these are otherwise only starting values
             self.layout_mode = C.LAYOUT_MODE if C.LAYOUT_MODE in LAYOUT_MODES else self.layout_mode
             self.crop_mode = C.CROP_MODE if C.CROP_MODE in CROP_MODES else self.crop_mode
@@ -928,6 +980,8 @@ class Wall:
             elif t.aspect_known and self.end_mode != "loop" and t.ipc.value("eof-reached") \
                     and t.ipc.value_seq("eof-reached") > t.swap_seq:
                 self.advance(t)          # it ended (keep-open paused it on its last frame): next / random file
+            elif t.aspect_known and t.switch_due and now >= t.switch_due:
+                self.timed_switch(t, now)
             elif not t.aspect_known:
                 # A file mpv cannot open leaves the player idle with an empty window (it does not exit,
                 # because of --force-window). Seen twice, 0.6 s apart, so a brief idle moment while a
@@ -1217,6 +1271,8 @@ class Wall:
         b("<Down>", lambda e: self.change_volume(-C.VOLUME_STEP))
         b("<n>", lambda e: self.swap_random())
         b("<e>", lambda e: self.cycle_end_mode())
+        for seq in ("<Control-e>", "<Control-E>"):   # not Shift+E: that is E with Caps Lock to tk
+            bind_all(seq, lambda e: None if self.dialog_open else self.cycle_switch())
         b("<bracketleft>", lambda e: self.change_speed(1 / 1.1))
         b("<bracketright>", lambda e: self.change_speed(1.1))
         b("<BackSpace>", lambda e: self.change_speed(None))
