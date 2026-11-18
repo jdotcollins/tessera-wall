@@ -54,6 +54,8 @@ HELP_SECTIONS = [
         (["L"], "Arrangement: grow, best fit, even grid"),
         (["C"], "Black bars: crop a little, fill, never crop"),
         (["Tab", "Shift+Tab"], "Focus the next / previous video"),
+        (["1", "…", "9"], "Focus video 1-9 (again to release)"),
+        (["+", "-"], "One more video from the same folder / one fewer"),
         (["0"], "Unpin, unfocus and mute everything"),
     ]),
     ("Playback", [
@@ -67,6 +69,7 @@ HELP_SECTIONS = [
         (["E"], "When a video ends: play again, next file, random file"),
         (["Ctrl+E"], "Move on to another file every 30 s / 1 min / 2 min / never"),
         (["G"], "Sync: every video follows the focused one (again to stop)"),
+        (["Ctrl+G"], "Sync, keeping each video's current time difference"),
         (["[", "]"], "Slower / faster (Backspace: normal speed)"),
         ([",", "."], "Step one frame back / forward"),
         (["B"], "Loop a section: set start, set end, clear"),
@@ -79,6 +82,7 @@ HELP_SECTIONS = [
         (["H", "?", "F1"], "Show or hide this list"),
         (["S"], "Settings"),
         (["Ctrl+S"], "Save this wall, to open it again from the start window"),
+        (["Ctrl+B"], "Black out: hide, pause and mute everything (again or Esc to return)"),
         (["F5"], "Reload the settings file"),
         (["U"], "Open the download page, when a new version is out"),
         (["Esc"], "Close this list, release pin or zoom, else quit"),
@@ -172,6 +176,8 @@ class Wall:
         self.settings: tk.Toplevel | None = None
         self.sync = False             # G: every video follows the focused one
         self.sync_checked = 0.0
+        self.sync_offsets: dict | None = None   # Ctrl+G: each tile's position when sync began (kept apart)
+        self.blanked: dict | None = None        # Ctrl+B: each tile's pause state before the blackout
         self.refused: list[str] = []  # reasons videos were not opened (memory guard), not yet shown
         # Template (set by main): rows used while the wall holds exactly that many videos, and the ratio
         # group of each file it opened, so N swaps within the same shape.
@@ -362,7 +368,7 @@ class Wall:
 
     def animate(self) -> bool:
         """Move frames towards their targets. Returns True while still animating."""
-        if self.anim_start is None:
+        if self.anim_start is None or self.blanked is not None:   # blacked out: frames stay hidden
             return False
         p = 1.0 if C.ANIM_MS <= 0 else min(1.0, (time.monotonic() - self.anim_start) * 1000 / C.ANIM_MS)
         e = 1 - (1 - p) ** 3
@@ -515,7 +521,7 @@ class Wall:
         step = 1.0 if C.CROSSFADE_MS <= 0 else dt * 1000 / C.CROSSFADE_MS
         fading = False
         for t in self.tiles:
-            target = 1.0 if t is self.focus else 0.0
+            target = 1.0 if t is self.focus and self.blanked is None else 0.0
             if t.gain == target or not t.ipc:
                 continue
             if t.gain == 0.0:                      # about to become audible: start from silence
@@ -615,7 +621,7 @@ class Wall:
     def timed_switch(self, t: Tile, now: float):
         """t's time is up: load the next or a random file (as when_finished says; random if that is loop).
         Not the video being pointed at, and not in sync mode: those get checked again a little later."""
-        if t is self.focus or self.sync or not t.ipc:
+        if t is self.focus or self.sync or self.blanked is not None or not t.ipc:
             t.switch_due = now + 5
             return
         new = self.pick_file(t, self.end_mode if self.end_mode != "loop" else "random")
@@ -655,6 +661,8 @@ class Wall:
 
     def load_into(self, t: Tile, new: str, announce: bool = True):
         log.info("file swapped: %s -> %s", t.path, new)
+        if self.sync_offsets:
+            self.sync_offsets.pop(t, None)           # a different file has no meaningful offset
         old = self.shape_of.get(os.path.normcase(t.path))
         if old:
             self.shape_of[os.path.normcase(new)] = old
@@ -871,7 +879,9 @@ class Wall:
             self.relayout(rearrange=True)
 
     def on_escape(self):
-        if self.settings:
+        if self.blanked is not None:
+            self.toggle_blackout()
+        elif self.settings:
             self.toggle_settings()
         elif self.help:
             self.toggle_help()
@@ -1076,22 +1086,30 @@ class Wall:
             if t.ipc:
                 t.ipc.post(*(args if t is self.focus or args[0] != "osd-msg" else args[1:]))
 
-    def toggle_sync(self):
+    def toggle_sync(self, keep_offsets: bool = False):
         """G: link playback. Pause, seek, speed and frame steps then act on every video, and videos that
-        drift more than a quarter of a second are pulled back to the focused one's position."""
+        drift more than a quarter of a second are pulled back to the focused one's position.
+        Ctrl+G (keep_offsets): the same, but every video keeps its current time difference to the others,
+        for cameras that started recording at different moments; nothing jumps when it starts."""
         lead = self.focus or (self.tiles[0] if self.tiles else None)
         if not lead or not lead.ipc:
             return
         self.sync = not self.sync
-        log.info("sync %s", "on" if self.sync else "off")
+        self.sync_offsets = None
+        log.info("sync %s%s", "on" if self.sync else "off", " (keeping offsets)" if self.sync and keep_offsets else "")
         if self.sync:
             pos, paused = lead.ipc.value("time-pos") or 0, lead.ipc.value("pause", False)
+            if keep_offsets:
+                self.sync_offsets = {t: t.ipc.value("time-pos") or 0 for t in self.tiles if t.ipc}
             for t in self.tiles:
                 if t.ipc and t is not lead:
-                    t.ipc.post("seek", pos, "absolute")
+                    if not keep_offsets:
+                        t.ipc.post("seek", pos, "absolute")
                     t.ipc.set_async("pause", paused)
                     t.ipc.set_async("speed", lead.ipc.value("speed", 1.0))
-        lead.ipc.post("show-text", "Sync on: every video follows this one" if self.sync else "Sync off", 2500)
+        text = ("Sync on: every video keeps its place relative to this one" if keep_offsets
+                else "Sync on: every video follows this one") if self.sync else "Sync off"
+        lead.ipc.post("show-text", text, 2500)
         self.sync_checked = time.monotonic()
 
     def keep_in_sync(self, now):
@@ -1102,13 +1120,77 @@ class Wall:
         if not lead or not lead.ipc or lead.ipc.value("time-pos") is None:
             return
         pos = lead.ipc.value("time-pos")
+        offsets = self.sync_offsets
         for t in self.tiles:
             if t is lead or not t.ipc or t.ipc.value("time-pos") is None:
                 continue
-            drift = t.ipc.value("time-pos") - pos
+            if offsets is not None:
+                if t not in offsets or lead not in offsets:
+                    continue                          # added or swapped since: not part of this sync
+                want = pos + offsets[t] - offsets[lead]
+                dur = t.ipc.value("duration")
+                if want < 0 or (dur and want > dur):
+                    continue                          # outside this video: leave it alone
+            else:
+                want = pos
+            drift = t.ipc.value("time-pos") - want
             if abs(drift) > 0.25:
-                t.ipc.post("seek", pos, "absolute")
+                t.ipc.post("seek", round(want, 3), "absolute")
                 log.info("sync: corrected %.2fs drift", drift)
+
+    def focus_number(self, n: int):
+        """1-9: focus and pin the n-th video (wall order: rows top to bottom, left to right); the same
+        number again releases it."""
+        if n > len(self.tiles):
+            return
+        t = self.tiles[n - 1]
+        self.set_pin(None if self.pin is t else t)
+
+    def add_one(self):
+        """+: one more random video from the focused (or last) video's folder; of the same shape in a
+        template wall. The wall re-arranges for the new count."""
+        src = self.focus or (self.tiles[-1] if self.tiles else None)
+        if not src or not src.ipc or "://" in src.path:
+            return
+        new = self.pick_file(src, "random")
+        if not new:
+            src.ipc.post("show-text", self.no_other_message(src))
+            return
+        shape = self.shape_of.get(os.path.normcase(src.path))
+        if shape:
+            self.shape_of[os.path.normcase(new)] = shape
+        log.info("one more video: %s", new)
+        self.incoming.put(new)
+
+    def remove_one(self):
+        """-: close the last video that is not the focused one (never the last video left)."""
+        if len(self.tiles) <= 1:
+            return
+        others = [t for t in self.tiles if t is not self.focus]
+        self.remove(others[-1], "one fewer (minus key)")
+
+    def toggle_blackout(self):
+        """Ctrl+B: hide every video, pause and mute everything, and stop "move on"; Ctrl+B or Esc again
+        brings everything back as it was."""
+        if self.blanked is None:
+            self.blanked = {t: bool(t.ipc.value("pause", False)) for t in self.tiles if t.ipc}
+            for t in self.tiles:
+                t.frame.place_forget()
+                t.placed = None
+                if t.ipc:
+                    t.ipc.set_async("pause", True)
+                    t.ipc.set_async("mute", True)
+                    t.gain = 0.0
+            self.ring.place_forget()
+            log.info("blackout on")
+        else:
+            paused, self.blanked = self.blanked, None
+            for t in self.tiles:
+                if t.ipc:
+                    t.ipc.set_async("pause", paused.get(t, False))
+            self.anim_start = time.monotonic()
+            self.relayout()
+            log.info("blackout off")
 
     def report_refused(self):
         if not self.refused:
@@ -1273,6 +1355,16 @@ class Wall:
         b("<e>", lambda e: self.cycle_end_mode())
         for seq in ("<Control-e>", "<Control-E>"):   # not Shift+E: that is E with Caps Lock to tk
             bind_all(seq, lambda e: None if self.dialog_open else self.cycle_switch())
+        for seq in ("<Control-g>", "<Control-G>"):
+            bind_all(seq, lambda e: None if self.dialog_open else self.toggle_sync(keep_offsets=True))
+        for seq in ("<Control-b>", "<Control-B>"):
+            bind_all(seq, lambda e: None if self.dialog_open else self.toggle_blackout())
+        for n in range(1, 10):
+            b(f"<Key-{n}>", lambda e, n=n: self.focus_number(n))
+        for seq in ("<plus>", "<equal>", "<KP_Add>"):
+            b(seq, lambda e: self.add_one())
+        for seq in ("<minus>", "<KP_Subtract>"):
+            b(seq, lambda e: self.remove_one())
         b("<bracketleft>", lambda e: self.change_speed(1 / 1.1))
         b("<bracketright>", lambda e: self.change_speed(1.1))
         b("<BackSpace>", lambda e: self.change_speed(None))

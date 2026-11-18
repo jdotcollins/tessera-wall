@@ -291,6 +291,15 @@ folder on the development PC still has the old name; nothing depends on it.
     mpv 0.38; checked on the bundled 0.42), N in 5..80; restarts, saved walls and sessions keep their
     positions. Ctrl+E rather than Shift+E: the wall binds the upper-case letter as the Caps Lock twin.
     Settings choices come back from tk as text; `ui.typed` turns them back into numbers.
+  - Small controls: 1–9 `focus_number` (set_pin, again to release). `+` `add_one`: `pick_file(random)`
+    from the focused/last tile's folder, shape carried over, queued like any added file (the count no
+    longer matches the template, so `arrange()` lays it out). `-` `remove_one`: the last unfocused tile.
+    Ctrl+G `toggle_sync(keep_offsets=True)`: records each tile's time-pos; `keep_in_sync` then wants
+    `lead_pos + start[t] - start[lead]`, skipping tiles added or swapped since (popped in `load_into`)
+    and targets outside the file. Ctrl+B `toggle_blackout`: `place_forget` every frame and the ring
+    (mpv's child windows hide with their frame), pause and mute all, remember each pause state;
+    `animate` does nothing and `update_audio` targets 0 while blanked; move-on waits. Undo re-places
+    frames (placed=None) and restores pauses; Esc undoes it first.
   - Entry points: `--template NAME` (or `best`) plans without asking; `--choose-template` shows
     `ui.template_window` (Explorer's folder verb `tesserawall-template`); the start window's "Use a
     template…" opens it modally after a folder dialog. With a wall already open, the new process claims
@@ -370,6 +379,7 @@ python tests/freeze_test.py     # a suspended player must not stall the wall
 python tests/phase2_test.py     # speed, frame step, A-B loop, tracks, snapshot, crash restart
 python tests/phase3_test.py     # memory guard, Tab focus, sync, Ctrl+S save, saved-wall button
 python tests/phase4_test.py     # templates: CLI, Best fit, chooser, N within shape, short folder, when finished
+python tests/controls_test.py   # 1-9, + / -, Ctrl+B blackout (screen pixels), Ctrl+G offsets
 python tests/add_test.py
 python tests/drop_test.py       # needs tkinterdnd2
 python tests/features_test.py   # writes a 26 MB clip to %TEMP% on first run; other tests reuse it

@@ -100,6 +100,8 @@ of the whole PC slowing to a crawl.
 | Drag onto another video | Swap their positions |
 | Click / drag the bottom edge | Seek within the focused video |
 | `Tab` / `Shift+Tab` | Focus the next / previous video (moves the pin, if one is set) |
+| `1` … `9` | Focus and pin video 1–9, counting row by row (the same number again releases it) |
+| `+` / `-` | Add one more random video from the same folder (same shape in a template wall) / close one |
 | `Space` / `Shift+Space` | Pause the focused video / pause or resume all |
 | `Left` `Right` wheel | Seek the focused video; with `Shift`, seek all |
 | `R` | Restart all from the beginning |
@@ -109,6 +111,7 @@ of the whole PC slowing to a crawl.
 | `E` | When a video ends: play it again, play the next file in its folder, or a random one |
 | `Ctrl+E` | Move every video on to another file after 30 s, 1 min, 2 min, or never (the one you point at stays) |
 | `G` | Sync: every video follows the focused one (pause, seek, speed, frame steps); again to stop |
+| `Ctrl+G` | Sync, but each video keeps its current time difference (cameras that started at different times) |
 | `[` `]` / `Backspace` | Slower / faster; back to normal speed |
 | `,` `.` | Step one frame back / forward |
 | `B` | Loop a section: set start, set end, clear |
@@ -119,6 +122,7 @@ of the whole PC slowing to a crawl.
 | `C` | Crop: limited, fill, fit |
 | `S` | Settings |
 | `Ctrl+S` | Save this wall under a name, to open it again from the start window |
+| `Ctrl+B` | Black out: hide, pause and mute everything; `Ctrl+B` or `Esc` brings it all back |
 | `F5` | Reload the settings file |
 | `U` | Open the download page, when a newer version is available |
 | `0` | Unpin, unfocus and mute everything |
