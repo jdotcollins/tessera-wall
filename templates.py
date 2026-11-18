@@ -75,6 +75,14 @@ version = 1
 # [[template]]
 # name = "Big one, four small"
 # rows = [["landscape"], ["landscape", "landscape", "landscape", "landscape"]]
+
+# A slot can also take its videos from a folder of its own: absolute, or relative to the folder you
+# apply the template to. Use single quotes for Windows paths.
+# [[template]]
+# name = "Films above, phone clips below"
+# rows = [["landscape", "landscape"],
+#         [{ shape = "portrait", folder = 'D:\\Videos\\Phone' }, { shape = "portrait", folder = 'D:\\Videos\\Phone' },
+#          { shape = "portrait", folder = 'D:\\Videos\\Phone' }]]
 """
 
 
@@ -83,18 +91,34 @@ class Template:
     name: str
     rows: list[list[str]]
     built_in: bool = False
+    # Per slot, parallel to rows: a folder of its own (as written: absolute, or relative to the folder the
+    # template is applied to), or None for the chosen folder. None for the whole template: no own folders.
+    folders: list[list[str | None]] | None = None
 
     @property
     def count(self) -> int:
         return sum(len(r) for r in self.rows)
 
-    def needs(self) -> dict[str, int]:
-        """{shape: slots} in first-seen order."""
-        out: dict[str, int] = {}
-        for row in self.rows:
-            for s in row:
-                out[s] = out.get(s, 0) + 1
+    def slots(self):
+        """(row, (shape, folder)) for every slot, row by row."""
+        for r, row in enumerate(self.rows):
+            for i, token in enumerate(row):
+                yield r, (token, self.folders[r][i] if self.folders else None)
+
+    def needs(self) -> dict[tuple[str, str | None], int]:
+        """{(shape, folder): slots} in first-seen order."""
+        out: dict[tuple, int] = {}
+        for _, key in self.slots():
+            out[key] = out.get(key, 0) + 1
         return out
+
+    @property
+    def own_folders(self) -> list[str]:
+        return list(dict.fromkeys(f for _, (_, f) in self.slots() if f))
+
+    @property
+    def needs_chosen_folder(self) -> bool:
+        return any(f is None for _, (_, f) in self.slots())
 
 
 @dataclass
@@ -167,15 +191,79 @@ def parse(data: dict, built_in: bool = False) -> tuple[list[Template], list[str]
                 or not all(isinstance(r, list) and r for r in rows)):
             problems.append(f"{label}: rows should be a list of rows, each a list of shapes")
             continue
-        bad = [s for r in rows for s in r if parse_shape(s) is None]
+        slots = [[_parse_slot(s) for s in r] for r in rows]
+        bad = next((s[2] for r in slots for s in r if s[2]), None)
         if bad:
-            problems.append(f"{label}: unknown shape {bad[0]!r}")
+            problems.append(f"{label}: {bad}")
             continue
         if normalise_name(t["name"]) in BEST_NAMES:
             problems.append(f"{label}: that name is reserved for Best fit")
             continue
-        out.append(Template(t["name"].strip(), [[str(s).strip().lower() for s in r] for r in rows], built_in))
+        folders = [[s[1] for s in r] for r in slots]
+        out.append(Template(t["name"].strip(), [[s[0] for s in r] for r in slots], built_in,
+                            folders if any(f for r in folders for f in r) else None))
     return out, problems, options
+
+
+def _parse_slot(s) -> tuple[str, str | None, str | None]:
+    """A slot is a shape ("portrait") or a table { shape = "portrait", folder = 'D:\\Clips' }; the shape
+    defaults to "any". Returns (shape, folder or None, problem or None)."""
+    if isinstance(s, str):
+        return (s.strip().lower(), None, None) if parse_shape(s) else ("", None, f"unknown shape {s!r}")
+    if isinstance(s, dict):
+        extra = sorted(set(s) - {"shape", "folder"})
+        if extra:
+            return "", None, f"unknown slot setting {extra[0]!r} (use shape and folder)"
+        shape = s.get("shape", "any")
+        if parse_shape(shape) is None:
+            return "", None, f"unknown shape {shape!r}"
+        folder = s.get("folder")
+        if folder is not None and (not isinstance(folder, str) or not folder.strip()):
+            return "", None, "folder should be a folder path in quotes"
+        return shape.strip().lower(), folder.strip() if folder else None, None
+    return "", None, f"a slot should be a shape or {{ shape = ..., folder = ... }}, not {s!r}"
+
+
+def base_folder(paths: list[str]) -> str | None:
+    """The folder a template is applied to: the first path given (or its folder, for a file)."""
+    if not paths:
+        return None
+    p = os.path.abspath(paths[0])
+    return os.path.dirname(p) if os.path.isfile(p) else p
+
+
+def resolve_folder(raw: str, base: str | None) -> str | None:
+    """A slot's folder as an absolute path: %VARS% and ~ expanded; relative to `base`. None if relative
+    and there is no base."""
+    p = os.path.expandvars(os.path.expanduser(raw))
+    if not os.path.isabs(p):
+        if not base:
+            return None
+        p = os.path.join(base, p)
+    return os.path.normpath(p)
+
+
+def gather(templates: list["Template"], base_paths: list[str], expand, probe) -> tuple[dict, dict]:
+    """Read the shapes of everything these templates could use, in one probe: the chosen paths and
+    every slot folder. expand(paths) -> files and probe(files) -> {file: aspect} are passed in (files.py
+    and probe.py), so this stays free of I/O of its own.
+    Returns (shapes of the chosen paths, {template name: {folder as written: {file: aspect}}})."""
+    base = base_folder(base_paths)
+    chosen = expand(list(base_paths)) if base_paths else []
+    folder_files: dict[str, list[str]] = {}
+    where: dict[tuple[str, str], str | None] = {}
+    for t in templates:
+        for raw in t.own_folders:
+            path = resolve_folder(raw, base)
+            where[(t.name, raw)] = path
+            if path and path not in folder_files:
+                folder_files[path] = expand([path]) if os.path.isdir(path) else []
+    every = list(dict.fromkeys(chosen + [f for files in folder_files.values() for f in files]))
+    found = probe(every) if every else {}
+    shapes = {p: found.get(p) for p in chosen}
+    per_template = {t.name: {raw: {p: found.get(p) for p in folder_files.get(where[(t.name, raw)] or "", [])}
+                             for raw in t.own_folders} for t in templates}
+    return shapes, per_template
 
 
 BUILT_IN = parse(tomllib.loads(BUILT_IN_TOML), built_in=True)[0]
@@ -241,57 +329,61 @@ def describe_need(token: str, n: int) -> str:
     return f"{n} {word}{'s' if n != 1 else ''}"
 
 
-def availability(template: Template, shapes: dict[str, float | None]) -> tuple[int, int]:
+def availability(template: Template, shapes: dict[str, float | None],
+                 folder_shapes: dict | None = None) -> tuple[int, int]:
     """(videos a plan would get, slots in the template) without choosing at random."""
-    got = sum(len(v) for v in _allocate(template, shapes, random.Random(0)).values())
+    got = sum(len(v[0]) for v in _allocate(template, shapes, random.Random(0), folder_shapes).values())
     return got, template.count
 
 
-def _allocate(template: Template, shapes, rng) -> dict[str, list[str]]:
-    """{shape token: chosen paths}. Exact ratios first, then classes, then "any", so the most specific
-    slots get first pick; each file is used once. A class picks the single largest matching ratio group."""
+def _allocate(template: Template, shapes, rng, folder_shapes=None) -> dict[tuple, tuple[list[str], dict]]:
+    """{(shape, folder): (chosen paths, {path: group ratio})}. Slots with a folder of their own draw from
+    it (folder_shapes[folder]), the others from `shapes`. Exact ratios first, then classes, then "any",
+    so the most specific slots get first pick; each file is used once. A class picks the single largest
+    matching ratio group of its source."""
     used: set[str] = set()
-    picked: dict[str, list[str]] = {}
-    for token, need in sorted(template.needs().items(), key=lambda kv: _order_key(kv[0])):
+    picked: dict[tuple, tuple[list[str], dict]] = {}
+    for (token, folder), need in sorted(template.needs().items(), key=lambda kv: _order_key(kv[0][0])):
+        source = (folder_shapes or {}).get(folder, {}) if folder else shapes
         if token == "any":
-            pool = [p for p, a in shapes.items() if a and p not in used]
-            picked[token] = rng.sample(pool, min(need, len(pool)))
+            pool = [p for p, a in source.items() if a and p not in used]
+            chosen = rng.sample(pool, min(need, len(pool)))
+            picked[(token, folder)] = (chosen, {p: source[p] for p in chosen})
         else:
-            best: list[str] = []
-            for ratio, paths in groups({p: a for p, a in shapes.items() if p not in used}):
-                if matches(token, ratio) and len(paths) > len(best):
-                    best = paths
-            picked[token] = rng.sample(best, min(need, len(best)))
-        used.update(picked[token])
+            best: tuple[float, list[str]] = (0.0, [])
+            for ratio, paths in groups({p: a for p, a in source.items() if p not in used}):
+                if matches(token, ratio) and len(paths) > len(best[1]):
+                    best = (ratio, paths)
+            chosen = rng.sample(best[1], min(need, len(best[1])))
+            picked[(token, folder)] = (chosen, {p: best[0] for p in chosen})
+        used.update(picked[(token, folder)][0])
     return picked
 
 
-def plan(template: Template, shapes: dict[str, float | None], rng: random.Random | None = None) -> Plan:
+def plan(template: Template, shapes: dict[str, float | None], rng: random.Random | None = None,
+         folder_shapes: dict | None = None) -> Plan:
+    """Choose files for the template: from `shapes` (the chosen folder) and, for slots with a folder of
+    their own, from folder_shapes[folder as written] (see gather())."""
     rng = rng or random.Random()
-    picked = _allocate(template, shapes, rng)
-    queues = {k: list(v) for k, v in picked.items()}
+    picked = _allocate(template, shapes, rng, folder_shapes)
+    queues = {k: list(v[0]) for k, v in picked.items()}
     items = []
-    for row in template.rows:
-        for token in row:
-            if queues[token]:
-                items.append(queues[token].pop(0))
-    short = [(t, n, len(picked[t])) for t, n in template.needs().items() if len(picked[t]) < n]
+    for _, key in template.slots():
+        if queues[key]:
+            items.append(queues[key].pop(0))
+    short = [(k, n, len(picked[k][0])) for k, n in template.needs().items() if len(picked[k][0]) < n]
     message = ""
     if short:
-        t, n, got = short[0]
-        message = (f"{template.name}: found {got} of {describe_need(t, n)}" if got else
-                   f"{template.name}: no {t} videos here") if t != "any" else \
-            f"{template.name}: found only {got} of {n} videos"
+        (t, folder), n, got = short[0]
+        where = f" in {os.path.basename(os.path.normpath(folder)) or folder}" if folder else ""
+        if t == "any":
+            message = f"{template.name}: found only {got} of {n} videos{where}"
+        else:
+            message = (f"{template.name}: found {got} of {describe_need(t, n)}{where}" if got else
+                       f"{template.name}: no {t} videos {where.strip() or 'here'}")
     rows = [len(r) for r in template.rows] if not short else None
-    shape_of = {p: (shapes[p] if t == "any" else _group_ratio(p, shapes)) for t, ps in picked.items() for p in ps}
+    shape_of = {p: r for _, ratios in picked.values() for p, r in ratios.items()}
     return Plan(template.name, items, rows, shape_of, message)
-
-
-def _group_ratio(path: str, shapes) -> float:
-    for ratio, paths in groups(shapes):
-        if path in paths:
-            return ratio
-    return shapes[path]
 
 
 def coverage(aspects: list[float], rows: list[int], W: int, H: int, max_crop: float) -> float:

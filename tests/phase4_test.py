@@ -15,10 +15,13 @@ Makes a folder of small H.264 clips once (%TEMP%\\tesserawall-p4-clips): 6 x 16:
   H. one video with the default "loop"; E switches to "next"; when it ends land1 follows land0
   I. switch_seconds = 4, random_start: videos move on (16:9 only) and start at random points; the
      pinned video stays
+  J. a template with a slot folder of its own (relative path): 2 x 16:9 from the chosen folder above
+     3 portrait clips from the other folder
 """
 import ctypes
 import os
 import re
+import shutil
 import subprocess
 import sys
 import tempfile
@@ -215,6 +218,25 @@ def main():
         r["I_swapped_to"] = [os.path.basename(m) for m in re.findall(r"file swapped: .* -> (.*)", text)]
         r["I_random_starts"] = len(re.findall(r"random start (\d+)%", text))
         r["I_rows"] = last_rows()
+
+        # J. a template whose bottom row takes portrait clips from a folder of its own (written relative to
+        #    the chosen folder): two 16:9 videos from CLIPS above three from the extra folder
+        extra = os.path.join(os.path.dirname(CLIPS), "tesserawall-p4-extra")
+        os.makedirs(extra, exist_ok=True)
+        for i in range(3):
+            target = os.path.join(extra, f"xport{i}.mkv")
+            if not os.path.exists(target):
+                shutil.copyfile(os.path.join(CLIPS, f"port{i}.mkv"), target)
+        cfg_two = os.path.join(tmp, "two", "config.toml")
+        os.makedirs(os.path.dirname(cfg_two))
+        open(cfg_two, "w").close()
+        slot = "{ shape = \"portrait\", folder = '..\\tesserawall-p4-extra' }"
+        with open(os.path.join(tmp, "two", "templates.toml"), "w", encoding="utf-8") as f:
+            f.write(f'version = 1\n[[template]]\nname = "Two sources"\n'
+                    f'rows = [["landscape", "landscape"], [{slot}, {slot}, {slot}]]\n')
+        p = run(["--config", cfg_two, "--session", os.path.join(tmp, "s4.json"),
+                 "--template", "Two sources", CLIPS])
+        r["J_exit"], r["J_added"], r["J_rows"] = p.returncode, added(), last_rows()
     finally:
         user32.SetCursorPos(orig.x, orig.y)
         for q in procs:
@@ -244,6 +266,9 @@ def main():
     assert not r["I_pinned_moved"], "the pinned video is never moved on"
     assert r["I_random_starts"] >= 4 + r["I_moved"], "every video (first and replacements) starts at random"
     assert r["I_rows"] == "[2, 2]"
+    assert r["J_exit"] == 0 and r["J_rows"] == "[2, 3]" and len(r["J_added"]) == 5, r["J_added"]
+    assert land(r["J_added"][:2]) and all(n.startswith("xport") for n in r["J_added"][2:]), \
+        "bottom row from the slot folder, top row from the chosen folder"
     print("PHASE4 TEST PASSED")
 
 

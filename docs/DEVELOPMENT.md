@@ -257,6 +257,14 @@ folder on the development PC still has the old name; nothing depends on it.
     The built-ins are the TOML string `BUILT_IN_TOML`, parsed by the same `parse()` as the user's
     `templates.toml` (next to the settings file, created with a commented example); a user template with
     the same name (case and x/× ignored) replaces a built-in. Bad entries are skipped and logged.
+  - Slot folders: a slot may be a table `{ shape, folder }` (shape defaults to `any`; other keys are
+    refused). `Template.folders` runs parallel to `rows` (None when no slot has a folder, so built-ins
+    are unchanged). A folder is absolute, or relative to `base_folder(paths)` (the first path, or its
+    folder), with `%VARS%` and `~` expanded (`resolve_folder`). `templates.gather` lists the chosen paths
+    and every slot folder of the given templates and reads all shapes in one `probe` call; `plan`
+    takes the slot folders' shapes as `folder_shapes`. Slots group by (shape, folder), so the "same
+    shape, same ratio" rule holds per source. Added as an optional key within format version 1: an
+    older Tessera Wall ignores the folder and fills those slots from the chosen folder.
   - Choosing (`templates.plan`): the folder's videos are grouped by ratio (3 %). Each distinct slot shape
     takes the single largest matching group, so a 2×2 landscape is four 16:9, never 16:9 mixed with
     4:3; exact ratios pick first, then classes, then `any`; a file is used once. Short of videos: open

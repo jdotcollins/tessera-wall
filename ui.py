@@ -557,7 +557,7 @@ def template_window(folders: list, config_path: str | None, parent=None) -> "tem
         log.warning("templates: %s", p)
     paths = expand(list(folders))
     name = ", ".join(os.path.basename(os.path.normpath(f)) or f for f in folders)
-    state = {"done": 0, "total": len(paths), "shapes": None}
+    state = {"done": 0, "total": len(paths), "shapes": None, "per_template": {}}
 
     tk.Label(win, text="Choose a template", bg=bg, fg="white", font=font(1.6, True)).pack(anchor="w")
     tk.Label(win, text=f"{name} – {len(paths)} video{'s' if len(paths) != 1 else ''}", bg=bg, fg=dim,
@@ -618,10 +618,12 @@ def template_window(folders: list, config_path: str | None, parent=None) -> "tem
         entry("best", preview.name, "", lambda: choose(lambda: T.best_fit(
             shapes, mw, mh, C.MAX_CROP, C.BALANCE_WEIGHT, most)), primary=True)
         for i, t in enumerate(all_templates):
-            got, need = T.availability(t, shapes)
+            own = state["per_template"].get(t.name, {})
+            got, need = T.availability(t, shapes, own)
             detail = (f"{need} videos" if got == need else f"only {got} of {need} here" if got else
                       "no matching videos here")
-            entry(f"t{i}", t.name, detail, lambda t=t: choose(lambda: T.plan(t, shapes)), enabled=got > 0)
+            entry(f"t{i}", t.name, detail, lambda t=t, own=own: choose(lambda: T.plan(t, shapes, folder_shapes=own)),
+                  enabled=got > 0)
         win.update_idletasks()
         place()
         win.update()
@@ -630,8 +632,12 @@ def template_window(folders: list, config_path: str | None, parent=None) -> "tem
                      b.winfo_width(), b.winfo_height())
 
     def work():
-        state["shapes"] = probe.probe(paths, probe.cache_path_for(config_path or C.user_config_path()),
-                                      progress=lambda d, n: state.update(done=d, total=n))
+        # One read for the chosen folder and every folder a template's slots name.
+        read = lambda files: probe.probe(files, probe.cache_path_for(config_path or C.user_config_path()),
+                                         progress=lambda d, n: state.update(done=d, total=n))
+        shapes, per_template = T.gather(all_templates, list(folders), expand, read)
+        state["per_template"] = per_template
+        state["shapes"] = shapes
 
     def poll():
         if state["shapes"] is not None:

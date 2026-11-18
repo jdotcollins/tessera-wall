@@ -83,7 +83,20 @@ name = "Big one, four small"
 rows = [["landscape"], ["landscape", "landscape", "landscape", "landscape"]]
 ```
 
-From the command line: `--template "2x2 landscape" FOLDER`, or `--template best FOLDER`.
+A slot can take its videos from a folder of its own: give it as `{ shape = ..., folder = ... }`, with
+an absolute path or one relative to the folder you apply the template to (use single quotes for Windows
+paths):
+
+```toml
+[[template]]
+name = "Films above, phone clips below"
+rows = [["landscape", "landscape"],
+        [{ shape = "portrait", folder = 'D:\Videos\Phone' }, { shape = "portrait", folder = 'D:\Videos\Phone' },
+         { shape = "portrait", folder = 'D:\Videos\Phone' }]]
+```
+
+From the command line: `--template "2x2 landscape" FOLDER`, or `--template best FOLDER`. A template whose
+slots all have their own folders needs no FOLDER.
 
 Press **H** in the wall for the list of controls, or rest the pointer on the top edge of the screen
 for a small menu bar with *Add videos*, *Add a folder*, *Controls*, *Save wall…*, *Settings* and *Close*.

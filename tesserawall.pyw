@@ -44,18 +44,21 @@ def choose_plan(ns, config_path: str):
     Returns a templates.Plan (possibly with no items and a message saying why), or None if closed."""
     if ns.choose_template:
         return template_window(ns.paths, config_path)
-    files = expand(ns.paths)
-    shapes = probe.probe(files, probe.cache_path_for(config_path))
+    read = lambda files: probe.probe(files, probe.cache_path_for(config_path))
     found, problems, options = T.load_templates(T.user_file_path(config_path))
     for p in problems:
         log.warning("templates: %s", p)
     if T.normalise_name(ns.template) in T.BEST_NAMES:
         _, _, mw, mh = monitor_under_cursor()
-        return T.best_fit(shapes, mw, mh, C.MAX_CROP, C.BALANCE_WEIGHT, options.get("best_fit_max", T.BEST_FIT_MAX))
+        return T.best_fit(read(expand(ns.paths)), mw, mh, C.MAX_CROP, C.BALANCE_WEIGHT,
+                          options.get("best_fit_max", T.BEST_FIT_MAX))
     t = T.find(found, ns.template)
     if not t:
         return T.Plan(ns.template, [], None, {}, f"There is no template called “{ns.template}”.")
-    return T.plan(t, shapes)
+    if t.needs_chosen_folder and not ns.paths:
+        return T.Plan(t.name, [], None, {}, f"“{t.name}” needs a folder to take its videos from.")
+    shapes, per_template = T.gather([t], ns.paths, expand, read)   # the chosen folder and the slots' own
+    return T.plan(t, shapes, folder_shapes=per_template[t.name])
 
 
 def main():

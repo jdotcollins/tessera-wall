@@ -111,6 +111,72 @@ def test_coverage():
     assert T.coverage([16 / 9] * 3, [3], 1920, 1080, 0.0) < 0.4, "a row of three leaves big bars"
 
 
+def test_slot_folders_format():
+    data = {"version": 1, "template": [
+        {"name": "Mixed", "rows": [["landscape", "landscape"],
+                                    [{"shape": "portrait", "folder": "Phone"}, {"folder": "D:\\Any"}]]},
+        {"name": "Bad key", "rows": [[{"shape": "portrait", "dir": "x"}]]},
+        {"name": "Bad shape", "rows": [[{"shape": "tall", "folder": "x"}]]},
+        {"name": "Empty folder", "rows": [[{"shape": "portrait", "folder": " "}]]},
+        {"name": "Number", "rows": [[5]]}]}
+    ts, problems, _ = T.parse(data)
+    assert [t.name for t in ts] == ["Mixed"] and len(problems) == 4, problems
+    t = ts[0]
+    assert t.rows == [["landscape", "landscape"], ["portrait", "any"]]
+    assert t.folders == [[None, None], ["Phone", "D:\\Any"]] and t.own_folders == ["Phone", "D:\\Any"]
+    assert t.needs_chosen_folder and t.needs() == {("landscape", None): 2, ("portrait", "Phone"): 1,
+                                                     ("any", "D:\\Any"): 1}
+    assert all(b.folders is None for b in T.BUILT_IN), "plain shapes stay plain"
+
+
+def test_resolve_folder():
+    base = os.path.join(tempfile.gettempdir(), "base")
+    assert T.resolve_folder("Phone", base) == os.path.normpath(os.path.join(base, "Phone"))
+    assert T.resolve_folder("C:\\Clips", base) == "C:\\Clips" and T.resolve_folder("Phone", None) is None
+    os.environ["TW_TEST_DIR"] = "C:\\Env"
+    assert T.resolve_folder("%TW_TEST_DIR%\\x", None) == "C:\\Env\\x"
+    assert T.resolve_folder("~", None) == os.path.normpath(os.path.expanduser("~"))
+
+
+def test_plan_with_slot_folders():
+    t = T.parse({"template": [{"name": "Two sources", "rows": [
+        ["landscape", "landscape"], [{"shape": "portrait", "folder": "Phone"}] * 3]}]})[0][0]
+    chosen = {f"L{i}": 16 / 9 for i in range(4)}
+    chosen.update({f"P{i}": 9 / 16 for i in range(5)})           # portrait here must NOT be used
+    phone = {f"Phone/p{i}": 9 / 16 for i in range(4)}
+    p = T.plan(t, chosen, random.Random(2), {"Phone": phone})
+    assert p.rows == [2, 3] and all(i.startswith("L") for i in p.items[:2])
+    assert all(i.startswith("Phone/") for i in p.items[2:]), p.items
+    assert abs(p.shape_of[p.items[2]] - 9 / 16) < 1e-9
+    short = T.plan(t, chosen, random.Random(2), {"Phone": {"Phone/p0": 9 / 16}})
+    assert short.rows is None and "found 1 of 3 portrait videos in Phone" in short.message, short.message
+    none = T.plan(t, chosen, random.Random(2), {})
+    assert "no portrait videos in Phone" in none.message
+    assert T.availability(t, chosen, {"Phone": phone}) == (5, 5)
+
+
+def test_gather_reads_everything_once():
+    base = tempfile.mkdtemp(prefix="tesserawall-gather-")
+    phone = os.path.join(base, "Phone")
+    os.makedirs(phone)
+    t = T.parse({"template": [{"name": "G", "rows": [["landscape"], [{"shape": "portrait", "folder": "Phone"},
+                                                                     {"folder": "Missing"}]]}]})[0][0]
+    listing = {base: [os.path.join(base, "a.mp4")], phone: [os.path.join(phone, "b.mp4")]}
+    calls = []
+
+    def expand(paths):
+        return [f for p in paths for f in listing.get(os.path.normpath(p), [])]
+
+    def probe(files):
+        calls.append(sorted(files))
+        return {f: (16 / 9 if f.endswith("a.mp4") else 9 / 16) for f in files}
+
+    shapes, per = T.gather([t], [base], expand, probe)
+    assert len(calls) == 1 and len(calls[0]) == 2, "one read for the chosen folder and the slot folders"
+    assert shapes == {os.path.join(base, "a.mp4"): 16 / 9}
+    assert per["G"]["Phone"] == {os.path.join(phone, "b.mp4"): 9 / 16} and per["G"]["Missing"] == {}
+
+
 def test_probe_parsing_and_aspect():
     assert P.display_aspect(1920, 1080, 90) == 1080 / 1920, "phone video recorded sideways"
     assert abs(P.display_aspect(720, 480, 0, 32 / 27) - 16 / 9) < 1e-9, "anamorphic pixels"
