@@ -121,8 +121,10 @@ def probe(paths: list[str], cache_path: str, progress=None, mpv: str | None = No
     script = os.path.join(C.app_dir(), "probe.lua")
     if todo and mpv and os.path.isfile(script):
         work = tempfile.mkdtemp(prefix="tesserawall-probe-")
-        size = -(-len(todo) // BATCHES)
-        batches = [todo[i:i + size] for i in range(0, len(todo), size)]
+        # Dealt round-robin, not in blocks: files in a folder were usually written to disk in name order,
+        # so the batches' reads stay near each other instead of making a hard disk's head jump between
+        # four distant regions.
+        batches = [b for b in (todo[i::BATCHES] for i in range(BATCHES)) if b]
         running = []
         for n, batch in enumerate(batches):
             playlist, out = os.path.join(work, f"list{n}.txt"), os.path.join(work, f"out{n}.txt")
