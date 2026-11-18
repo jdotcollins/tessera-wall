@@ -13,6 +13,7 @@ from ctypes import wintypes
 from dataclasses import dataclass, field
 from tkinter import filedialog
 from tkinter import messagebox
+from tkinter import simpledialog
 
 from ipc import MpvIpc
 from layout import Rect
@@ -22,7 +23,8 @@ from layout import layout
 from layout import panscan_for
 import config as C
 import updates
-from files import expand
+from files import expand, save_wall
+import resources
 from ui import fade, hover, round_corners, settings_window
 from winapi import GA_ROOT, pictures_folder, user32
 
@@ -47,6 +49,7 @@ HELP_SECTIONS = [
     ("Layout", [
         (["L"], "Arrangement: grow, best fit, even grid"),
         (["C"], "Black bars: crop a little, fill, never crop"),
+        (["Tab", "Shift+Tab"], "Focus the next / previous video"),
         (["0"], "Unpin, unfocus and mute everything"),
     ]),
     ("Playback", [
@@ -57,6 +60,7 @@ HELP_SECTIONS = [
         (["R"], "Restart all from the beginning"),
         (["Page Down", "Page Up"], "Next / previous file from its folder"),
         (["N"], "Swap for a random file from its folder"),
+        (["G"], "Sync: every video follows the focused one (again to stop)"),
         (["[", "]"], "Slower / faster (Backspace: normal speed)"),
         ([",", "."], "Step one frame back / forward"),
         (["B"], "Loop a section: set start, set end, clear"),
@@ -68,6 +72,7 @@ HELP_SECTIONS = [
     ("App", [
         (["H", "?", "F1"], "Show or hide this list"),
         (["S"], "Settings"),
+        (["Ctrl+S"], "Save this wall, to open it again from the start window"),
         (["F5"], "Reload the settings file"),
         (["U"], "Open the download page, when a new version is out"),
         (["Esc"], "Close this list, release pin or zoom, else quit"),
@@ -105,6 +110,7 @@ class Tile:
     swapped: bool = False        # file was replaced with `n`; wait for mpv to report the new one
     swap_seq: int = 0            # ipc.seq when the replacement was requested; only newer news counts
     restarts: list = field(default_factory=list)   # times this tile's player was restarted after a crash
+    size: tuple | None = None    # video width, height once known (for the memory estimate)
 
 
 def fmt_time(s: float) -> str:
@@ -155,6 +161,9 @@ class Wall:
         self.hint_shown = False
         self.topbar: tk.Toplevel | None = None
         self.settings: tk.Toplevel | None = None
+        self.sync = False             # G: every video follows the focused one
+        self.sync_checked = 0.0
+        self.refused: list[str] = []  # reasons videos were not opened (memory guard), not yet shown
         self.ring = tk.Frame(root, bg="#6CB6FF", highlightthickness=0, bd=0)   # focus outline
         self.top_since: float | None = None   # when the pointer reached the top edge
         self.dialog_open = False
@@ -184,6 +193,13 @@ class Wall:
         path, start = item if isinstance(item, tuple) else (item, 0)
         if len(self.tiles) >= C.MAX_VIDEOS:
             log.info("ignored (MAX_VIDEOS reached): %s", path)
+            self.refused.append(f"at most {C.MAX_VIDEOS} videos")
+            return
+        costs = [resources.video_cost_mb(*t.size) if t.size else resources.video_cost_mb() for t in self.tiles]
+        ok, why = resources.room_for_one_more(costs, resources.gpu_memory_mb(), resources.free_ram_mb())
+        if not ok:
+            log.info("not opened (%s): %s", why, path)
+            self.refused.append(why)
             return
         frame = tk.Frame(self.root, bg="black", highlightthickness=0, bd=0)
         frame.place(x=0, y=0, width=1, height=1)
@@ -647,6 +663,7 @@ class Wall:
         button("add", "Add videos…", lambda: self.add_from_dialog(folder=False))
         button("folder", "Add a folder…", lambda: self.add_from_dialog(folder=True))
         button("controls", "Controls", lambda: (self.hide_topbar(), self.toggle_help()))
+        button("save", "Save wall\u2026", lambda: (self.hide_topbar(), self.save_wall_as()))
         button("settings", "Settings", lambda: (self.hide_topbar(), self.toggle_settings()))
         button("close", "Close  ✕", self.quit, side="right", hover="#C42B1C")
         bar.update_idletasks()
@@ -861,6 +878,7 @@ class Wall:
                 if w and h:
                     rot = (t.ipc.value("video-params") or {}).get("rotate") or 0
                     t.aspect = h / w if rot in (90, 270) else w / h
+                    t.size = (w, h)
                     t.aspect_known = True
                     self.need_layout = True
                     log.info("aspect known %.4f (%sx%s rot=%s): %s", t.aspect, w, h, rot, t.path)
@@ -885,6 +903,8 @@ class Wall:
         self.update_bar(now)
         self.update_topbar(pos, now)
         self.show_update_notice()
+        self.keep_in_sync(now)
+        self.report_refused()
         fading =self.update_audio(min(0.05, now - self.last_tick))
         self.last_tick = now
         animating = self.animate()
@@ -911,9 +931,98 @@ class Wall:
             updates.open_release_page(found["url"])
 
     # ---- input -------------------------------------------------------------
+    SYNCED = {"multiply", "set", "frame-step", "frame-back-step"}   # speed and stepping follow in sync mode
+
     def cmd(self, *args):
-        if self.focus and self.focus.ipc:
-            self.focus.ipc.post(*args)
+        if not (self.focus and self.focus.ipc):
+            return
+        name = args[1] if args[0] == "osd-msg" else args[0]
+        if self.sync and args[:2] == ("cycle", "pause"):
+            state = not self.focus.ipc.value("pause", False)   # one decision for all, so they stay together
+            for t in self.tiles:
+                if t.ipc:
+                    t.ipc.set_async("pause", state)
+            return
+        targets = self.tiles if (self.sync and name in self.SYNCED) else [self.focus]
+        for t in targets:
+            if t.ipc:
+                t.ipc.post(*(args if t is self.focus or args[0] != "osd-msg" else args[1:]))
+
+    def toggle_sync(self):
+        """G: link playback. Pause, seek, speed and frame steps then act on every video, and videos that
+        drift more than a quarter of a second are pulled back to the focused one's position."""
+        lead = self.focus or (self.tiles[0] if self.tiles else None)
+        if not lead or not lead.ipc:
+            return
+        self.sync = not self.sync
+        log.info("sync %s", "on" if self.sync else "off")
+        if self.sync:
+            pos, paused = lead.ipc.value("time-pos") or 0, lead.ipc.value("pause", False)
+            for t in self.tiles:
+                if t.ipc and t is not lead:
+                    t.ipc.post("seek", pos, "absolute")
+                    t.ipc.set_async("pause", paused)
+                    t.ipc.set_async("speed", lead.ipc.value("speed", 1.0))
+        lead.ipc.post("show-text", "Sync on: every video follows this one" if self.sync else "Sync off", 2500)
+        self.sync_checked = time.monotonic()
+
+    def keep_in_sync(self, now):
+        if not self.sync or now - self.sync_checked < 1.0:
+            return
+        self.sync_checked = now
+        lead = self.focus or (self.tiles[0] if self.tiles else None)
+        if not lead or not lead.ipc or lead.ipc.value("time-pos") is None:
+            return
+        pos = lead.ipc.value("time-pos")
+        for t in self.tiles:
+            if t is lead or not t.ipc or t.ipc.value("time-pos") is None:
+                continue
+            drift = t.ipc.value("time-pos") - pos
+            if abs(drift) > 0.25:
+                t.ipc.post("seek", pos, "absolute")
+                log.info("sync: corrected %.2fs drift", drift)
+
+    def report_refused(self):
+        if not self.refused:
+            return
+        target = next((t for t in self.tiles if t.ipc), None)
+        if target:
+            n = len(self.refused)
+            target.ipc.post("show-text", f"{n} video{'s' if n != 1 else ''} not opened: {self.refused[0]}", 7000)
+            log.info("refused reported: %d (%s)", n, self.refused[0])
+            self.refused = []
+
+    def move_focus(self, step):
+        """Tab / Shift+Tab: focus the next / previous video in wall order (moving a pin, if set)."""
+        if not self.tiles:
+            return "break"
+        i = self.tiles.index(self.focus) if self.focus in self.tiles else (-1 if step > 0 else 0)
+        t = self.tiles[(i + step) % len(self.tiles)]
+        if self.pin:
+            self.set_pin(t, zoom=self.zoom)
+        else:
+            self.set_focus(t)
+        return "break"                 # stop tk's own Tab handling
+
+    def save_wall_as(self):
+        """Ctrl+S / menu: save the open videos and positions under a name, for the start window."""
+        items = [{"path": t.path, "pos": round((t.ipc.value("time-pos") if t.ipc else 0) or 0, 1)}
+                 for t in self.tiles]
+        if not items:
+            return
+        self.dialog_open = True
+        try:
+            name = simpledialog.askstring("Save wall", "Name for this wall:", parent=self.root)
+        finally:
+            self.dialog_open = False
+            self.root.focus_set()
+        if not name or not name.strip():
+            return
+        path = save_wall(self.config_path, name, items)
+        log.info("wall saved: %s (%d videos)", path, len(items))
+        target = self.focus or self.tiles[0]
+        if target.ipc:
+            target.ipc.post("show-text", f"Saved \u201c{name.strip()}\u201d", 2500)
 
     def change_speed(self, factor):
         """[ and ]: slower / faster by 10 %; Backspace (factor None): normal speed. mpv shows the result."""
@@ -992,7 +1101,7 @@ class Wall:
 
     def seek(self, direction, everyone=False):
         seconds = direction * C.SEEK_SECONDS   # read now, so a config reload (F5) takes effect
-        for t in (self.tiles if everyone else [self.focus]):
+        for t in (self.tiles if (everyone or self.sync) else [self.focus]):
             if t and t.ipc:
                 t.ipc.post("seek", seconds, "relative")
         self.bar_next = 0.0
@@ -1014,9 +1123,10 @@ class Wall:
         def b(seq, fn):
             """bind_all, plus the upper-case twin of a letter key: with Caps Lock on (or Shift held)
             tk reports <R>, not <r>, and without this every letter key silently stops working."""
-            bind_all(seq, fn)
+            guarded = lambda e, fn=fn: None if self.dialog_open else fn(e)   # a dialog has the keys
+            bind_all(seq, guarded)
             if len(seq) == 3 and seq[1].isalpha() and seq[1].islower():
-                bind_all(f"<{seq[1].upper()}>", fn)
+                bind_all(f"<{seq[1].upper()}>", guarded)
 
         b("<Escape>", lambda e: self.on_escape())
         b("<q>", lambda e: self.quit())
@@ -1041,6 +1151,11 @@ class Wall:
         b("<t>", lambda e: self.cycle_track("sub"))
         b("<a>", lambda e: self.cycle_track("audio"))
         b("<p>", lambda e: self.snapshot())
+        b("<g>", lambda e: self.toggle_sync())
+        bind_all("<Tab>", lambda e: None if self.dialog_open else self.move_focus(1))
+        bind_all("<Shift-Tab>", lambda e: None if self.dialog_open else self.move_focus(-1))
+        for seq in ("<Control-s>", "<Control-S>"):
+            bind_all(seq, lambda e: None if self.dialog_open else self.save_wall_as())
         b("<F5>", lambda e: self.reload_config())
         b("<s>", lambda e: self.toggle_settings())
         b("<u>", lambda e: self.open_update())

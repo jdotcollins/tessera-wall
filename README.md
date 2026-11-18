@@ -43,7 +43,7 @@ puts a shortcut on the Desktop. `install.ps1 -Uninstall` removes them. Re-run it
 ## Use
 
 - Start Tessera Wall with nothing selected and a small window asks what to play: drop videos or folders on
-  it, choose them with a button, or reopen the last session where you left it.
+  it, choose them with a button, reopen the last session where you left it, or open a wall you saved.
 - Or select videos or a folder in Explorer, right-click, and choose **Play together in Tessera Wall**
   or **Send to > Tessera Wall** (on Windows 11 both are under *Show more options*).
 - Or drop them on the Desktop shortcut. Doing either while a wall is open adds to it.
@@ -51,7 +51,11 @@ puts a shortcut on the Desktop. `install.ps1 -Uninstall` removes them. Re-run it
 - Command line: `pythonw tesserawall.pyw [--random N] [--resume] FILE_OR_FOLDER...`
 
 Press **H** in the wall for the list of controls, or rest the pointer on the top edge of the screen
-for a small menu bar with *Add videos*, *Add a folder*, *Controls* and *Close*.
+for a small menu bar with *Add videos*, *Add a folder*, *Controls*, *Save wall…*, *Settings* and *Close*.
+
+A wall holds up to 24 videos. Before opening each one, Tessera Wall estimates whether your graphics card
+and free memory have room for it; videos that would not fit are left out and the wall says so, instead
+of the whole PC slowing to a crawl.
 
 | Input | Action |
 |---|---|
@@ -60,12 +64,14 @@ for a small menu bar with *Add videos*, *Add a folder*, *Controls* and *Close*.
 | Double-click | Zoom the video to most of the screen (again to undo) |
 | Drag onto another video | Swap their positions |
 | Click / drag the bottom edge | Seek within the focused video |
+| `Tab` / `Shift+Tab` | Focus the next / previous video (moves the pin, if one is set) |
 | `Space` / `Shift+Space` | Pause the focused video / pause or resume all |
 | `Left` `Right` wheel | Seek the focused video; with `Shift`, seek all |
 | `R` | Restart all from the beginning |
 | `Up` `Down` | Volume of the focused video (remembered per video) |
 | `Page Down` / `Page Up` | Next / previous file from the focused video's folder |
 | `N` | Swap the focused video for a random one from its folder |
+| `G` | Sync: every video follows the focused one (pause, seek, speed, frame steps); again to stop |
 | `[` `]` / `Backspace` | Slower / faster; back to normal speed |
 | `,` `.` | Step one frame back / forward |
 | `B` | Loop a section: set start, set end, clear |
@@ -75,12 +81,13 @@ for a small menu bar with *Add videos*, *Add a folder*, *Controls* and *Close*.
 | `L` | Layout: grow, flat, grid |
 | `C` | Crop: limited, fill, fit |
 | `S` | Settings |
+| `Ctrl+S` | Save this wall under a name, to open it again from the start window |
 | `F5` | Reload the settings file |
 | `U` | Open the download page, when a newer version is available |
 | `0` | Unpin, unfocus and mute everything |
 | `Esc` | Close the controls list, else release pin/zoom, else quit |
 | `Q` | Quit and remember this session |
-| Pointer at the top edge | Menu bar: add videos, controls, settings, close |
+| Pointer at the top edge | Menu bar: add videos, controls, save wall, settings, close |
 
 ## Settings
 

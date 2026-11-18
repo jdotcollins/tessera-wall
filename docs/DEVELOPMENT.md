@@ -25,8 +25,9 @@ folder on the development PC still has the old name; nothing depends on it.
 | `wall.py` | The wall: `Tile`, `Wall` (layout and animation, hover and focus, input, audio, overlays), the controls table |
 | `ui.py` | Start window, Settings window, and window helpers (dark title bar, fades, rounded corners, hover, icon, drag-and-drop) |
 | `instance.py` | One wall per user: control pipe, gathering multi-file launches, the listener thread |
-| `files.py` | Arguments to video paths, Explorer's sort order, the saved session |
-| `winapi.py` | The shared `user32` handle and the monitor under the pointer |
+| `files.py` | Arguments to video paths, Explorer's sort order, the saved session, saved walls |
+| `winapi.py` | The shared `user32` handle, the monitor under the pointer, the Pictures folder |
+| `resources.py` | Graphics memory and free RAM, and whether there is room for one more video |
 | `layout.py` | Pure tiling maths: `arrange`, `layout`, `grid`, `panscan_for`, `Rect` |
 | `ipc.py` | mpv JSON-IPC client over a Windows named pipe: pushed property values, non-blocking sends |
 | `config.py` | Setting defaults (`SETTINGS` table), the user's TOML file, locating mpv |
@@ -195,7 +196,7 @@ folder on the development PC still has the old name; nothing depends on it.
 - Icon: `tools/make_icon.py` draws it with the standard library only and writes `tesserawall.ico` (exe,
   shortcuts, installer) and `tesserawall.png`; both are committed. `set_icon()` loads them from `app_dir()`.
 - Controls list: `Wall.toggle_help` builds a borderless always-on-top `tk.Toplevel` from the
-  `HELP_SECTIONS` table (laid out in two columns by `HELP_COLUMNS`) at the top of `tesserawall.pyw`; key
+  `HELP_SECTIONS` table (laid out in two columns by `HELP_COLUMNS`) at the top of `wall.py`; key
   names become key chips. **When a key or gesture changes, update `HELP_SECTIONS` and the README.**
   `-topmost` must be set after the window is mapped, and `root.focus_force()` must not be called after
   it (it raises the wall over the list; use `focus_set`).
@@ -216,6 +217,34 @@ folder on the development PC still has the old name; nothing depends on it.
   - Hover colours on flat buttons: `hover()`. The start window's drop zone is a Canvas with a dashed
     border that lights up on `<<DropEnter>>` and can be clicked to choose files.
 - Log: `%TEMP%\tesserawall.log`, rewritten each run. Under `pythonw.exe` it is the only diagnostic.
+- Playback keys (Phase 2): speed, frame step, A-B loop and track keys post mpv commands with the
+  `osd-msg` prefix, so mpv itself shows the result on the video. `set` needs its value as text (`"1"`,
+  not `1`): mpv silently ignored a number.
+- Snapshots: `screenshot-to-file <path> video` (the frame without overlays), named
+  `<file> at <m>m<ss>s <date-time>.png`, into `snapshot_dir` or `winapi.pictures_folder()`\Tessera Wall
+  (the real Pictures folder via `SHGetKnownFolderPath`, so OneDrive redirection is respected).
+- Crash restart: a player that exits with a non-zero code after it had shown video is restarted into
+  the same frame at its last pushed `time-pos` (`Wall.restart`, `Wall.spawn`), at most 3 times a minute
+  per tile, then the tile is removed as before. A player closed by the user exits with 0 and is removed.
+- Memory guard (`resources.py`): before each `Wall.add`, the estimated graphics memory of the open
+  videos plus one more 1080p video (60 MB + 110 MB per 1080p of picture, from measurements of 6 x
+  1080p60) must fit in 80% of the largest card's dedicated memory (registry
+  `HardwareInformation.qwMemorySize`, 64-bit, unlike WMI's `AdapterRAM`), and 220 MB more RAM must
+  leave 768 MB free. Refused videos are collected in `Wall.refused` and reported once on screen by
+  `report_refused`. These are estimates, not measurements of the running players; integrated GPUs
+  report small dedicated memory and may be refused early. `TESSERAWALL_VRAM_MB` overrides the reading
+  (tests). `MAX_VIDEOS` is 24.
+- Sync (`G`, `Wall.toggle_sync`): seeks every video to the focused one and copies its pause and speed;
+  while on, `Wall.cmd` sends speed and frame-step commands to all, `Space` sets one pause state on all,
+  seeks go to all, and `keep_in_sync` (every second from `tick`) re-seeks any video more than 0.25 s
+  away from the focused one. Meant for videos of the same length (several angles of one event).
+- Tab focus: `Wall.move_focus` returns `"break"` so tk's own focus traversal never runs. On the
+  development PC a synthetic bare `Tab` never reaches any tk window (Shift+Tab does), so the test
+  drives it with Shift+Tab; plain Tab was not verified by a test.
+- Saved walls: `files.save_wall` writes `{"name", "videos": [{"path", "pos"}]}` to a `walls` folder
+  next to the settings file (so a test's `--config` keeps them separate); `list_walls` returns the four
+  newest for the start window. Ctrl+S and the save dialog: while `Wall.dialog_open` is set, every key
+  binding ignores its key, or typing a name would also drive the wall.
 
 ## GPU driver timeouts
 
@@ -265,7 +294,10 @@ bundled pin), Python 3.13, one 2560x1440 monitor at 100% scaling, AMD GPU with H
 
 - Any other machine: other GPUs, Windows 10, other DPI scaling, HDR off, more than one monitor.
 - Ordinary compressed files in everyday use beyond one manual session; the tests use generated clips.
-- Mouse wheel, `Up` (volume), `x` / `Delete` / middle-click, `0`, dragging along the seek bar.
+- Mouse wheel, `Up` (volume), `x` / `Delete` / middle-click, `0`, dragging along the seek bar,
+  plain `Tab` (see Tab focus above).
+- The memory guard against a card actually running out of memory; only its estimate and a pretend
+  700 MB card were tested.
 - The installer on a clean PC, or through its interactive wizard (only silent installs were tried).
 - Whether the IPC connect handshake (`MpvIpc._handshake`) actually prevents the lost first message:
   the loss was seen about 1 in 50 connections while players were being resized, but a headless loop
@@ -284,20 +316,7 @@ python test_updates.py
 python tests/smoke.py           # every test below takes over the screen, mouse and often keyboard
 python tests/freeze_test.py     # a suspended player must not stall the wall
 python tests/phase2_test.py     # speed, frame step, A-B loop, tracks, snapshot, crash restart
-```
-
-Phase 2 notes (playback keys, snapshots, crash restart):
-- Speed, frame step, A-B loop and track keys post mpv commands with the `osd-msg` prefix, so mpv
-  itself shows the result on the video. `set` needs its value as text (`"1"`, not `1`): mpv silently
-  ignored a number.
-- Snapshots: `screenshot-to-file <path> video` (the frame without overlays), named
-  `<file> at <m>m<ss>s <date-time>.png`, into `snapshot_dir` or `winapi.pictures_folder()`\Tessera Wall
-  (the real Pictures folder via `SHGetKnownFolderPath`, so OneDrive redirection is respected).
-- Crash restart: a player that exits with a non-zero code after it had shown video is restarted into
-  the same frame at its last pushed `time-pos` (`Wall.restart`, `Wall.spawn`), at most 3 times a minute
-  per tile, then the tile is removed as before. A player closed by the user exits with 0 and is removed.
-
-```
+python tests/phase3_test.py     # memory guard, Shift+Tab focus, sync, Ctrl+S save, saved-wall button
 python tests/add_test.py
 python tests/drop_test.py       # needs tkinterdnd2
 python tests/features_test.py   # writes a 26 MB clip to %TEMP% on first run; other tests reuse it

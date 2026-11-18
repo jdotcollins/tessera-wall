@@ -30,6 +30,42 @@ def expand(args: list[str]) -> list[str]:
     return out
 
 
+def walls_dir(config_path: str) -> str:
+    """Saved walls live next to the settings file, so tests (with their own --config) stay separate."""
+    return os.path.join(os.path.dirname(os.path.abspath(config_path)), "walls")
+
+
+def save_wall(config_path: str, name: str, items: list) -> str:
+    safe = "".join(ch if ch.isalnum() or ch in " -_." else "_" for ch in name).strip()[:60] or "wall"
+    folder = walls_dir(config_path)
+    os.makedirs(folder, exist_ok=True)
+    path = os.path.join(folder, safe + ".json")
+    with open(path, "w", encoding="utf-8") as f:
+        json.dump({"name": name.strip()[:60], "videos": items}, f, indent=1)
+    return path
+
+
+def list_walls(config_path: str, limit: int = 4) -> list[tuple[str, list]]:
+    """Most recently saved walls first, as (name, items) with items ready for load_session's format."""
+    folder = walls_dir(config_path)
+    try:
+        files = sorted((os.path.join(folder, f) for f in os.listdir(folder) if f.endswith(".json")),
+                       key=os.path.getmtime, reverse=True)
+    except OSError:
+        return []
+    out = []
+    for path in files[:limit]:
+        items = load_session(path)
+        if items:
+            try:
+                with open(path, encoding="utf-8") as f:
+                    name = json.load(f).get("name") or os.path.splitext(os.path.basename(path))[0]
+            except (OSError, ValueError):
+                name = os.path.splitext(os.path.basename(path))[0]
+            out.append((str(name), items))
+    return out
+
+
 def load_session(path: str) -> list[tuple[str, float]]:
     """Videos from the last saved session as (path, position) pairs; files that are gone are skipped."""
     try:

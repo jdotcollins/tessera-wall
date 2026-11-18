@@ -25,7 +25,7 @@ SETTINGS = [
      "Cost: HDR videos are tone-mapped to SDR inside the wall. Applies to videos opened afterwards."),
     ("mpv", "USE_USER_MPV_CONFIG", False, "true = let each player load your own mpv.conf and scripts."),
     ("mpv", "EXTRA_MPV_ARGS", [], 'Extra mpv options for every player, e.g. ["--volume=70", "--hwdec=no"].'),
-    ("mpv", "MAX_VIDEOS", 12, "Most videos a wall will open; extra files are ignored."),
+    ("mpv", "MAX_VIDEOS", 24, "Most videos a wall will open; extra files are ignored."),
     ("mpv", "VIDEO_EXTS", {".mp4", ".mkv", ".webm", ".mov", ".avi", ".m4v", ".wmv", ".flv", ".ts", ".m2ts",
                            ".mpg", ".mpeg", ".gif", ".y4m"},
      "File types picked up when you open a folder."),

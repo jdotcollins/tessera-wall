@@ -10,7 +10,7 @@ from tkinter import filedialog
 
 import config as C
 import updates
-from files import expand
+from files import expand, list_walls
 from winapi import GA_ROOT, monitor_under_cursor, user32
 
 log = logging.getLogger("tesserawall")
@@ -331,10 +331,17 @@ def start_window(last_session: list, incoming: queue.Queue, checker: "updates.Ch
     def font(scale=1.0, bold=False):
         return ("Segoe UI", -int(u * scale), "bold") if bold else ("Segoe UI", -int(u * scale))
 
+    poll: list = []                                       # pending check_handed_over, cancelled on close
+
+    def close():
+        for job in poll:
+            root.after_cancel(job)
+        root.destroy()
+
     def finish(items):
         if items:
             chosen.extend(items)
-            root.destroy()
+            close()
         else:
             status.config(text="No videos found in that selection.")
 
@@ -396,6 +403,10 @@ def start_window(last_session: list, incoming: queue.Queue, checker: "updates.Ch
     if last_session:
         n = len(last_session)
         button("resume", f"Reopen last session ({n} video{'s' if n != 1 else ''})", lambda: finish(last_session))
+    for i, (name, items) in enumerate(list_walls(config_path) if config_path else []):
+        n = len(items)
+        button(f"wall{i}", f"Open \u201c{name}\u201d ({n} video{'s' if n != 1 else ''})",
+               lambda items=items: finish(items))
     footer = tk.Frame(root, bg=bg)
     footer.pack(fill="x", pady=(u // 2, 0))
     status = tk.Label(footer, text="In the wall: H shows the controls, Esc exits.", bg=bg, fg=dim, font=font(0.9))
@@ -435,7 +446,8 @@ def start_window(last_session: list, incoming: queue.Queue, checker: "updates.Ch
             root.dnd_bind("<<Drop>>", dropped)
         except Exception as e:
             log.info("start window: drag-and-drop unavailable: %s", e)
-    root.bind("<Escape>", lambda e: root.destroy())
+    root.bind("<Escape>", lambda e: close())
+    root.protocol("WM_DELETE_WINDOW", close)
 
     update_link: list = []
 
@@ -459,8 +471,8 @@ def start_window(last_session: list, incoming: queue.Queue, checker: "updates.Ch
             return
         if checker and checker.result and not update_link:
             show_update(checker.result)
-        root.after(150, check_handed_over)
-    root.after(150, check_handed_over)
+        poll[:] = [root.after(150, check_handed_over)]
+    poll[:] = [root.after(150, check_handed_over)]
     root.attributes("-alpha", 0.0)
     root.deiconify()
     log.info("start window dark title bar: %s", dark_title_bar(root))
