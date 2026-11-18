@@ -346,10 +346,14 @@ def start_window(last_session: list, incoming: queue.Queue, checker: "updates.Ch
         return ("Segoe UI", -int(u * scale), "bold") if bold else ("Segoe UI", -int(u * scale))
 
     poll: list = []                                       # pending check_handed_over, cancelled on close
+    jobs: list = []                                       # other pending after() calls, cancelled on close
 
     def close():
-        for job in poll:
-            root.after_cancel(job)
+        for job in poll + jobs:
+            try:
+                root.after_cancel(job)
+            except tk.TclError:
+                pass
         root.destroy()
 
     def finish(items):
@@ -430,6 +434,46 @@ def start_window(last_session: list, incoming: queue.Queue, checker: "updates.Ch
         n = len(items)
         button(f"wall{i}", f"Open \u201c{name}\u201d ({n} video{'s' if n != 1 else ''})",
                lambda items=items: finish(items))
+
+    # Templates whose every slot names a folder need no folder chosen: one click opens them.
+    import templates as T
+    ready = [t for t in (T.load_templates(T.user_file_path(config_path))[0] if config_path else [])
+             if not t.needs_chosen_folder][:4]
+
+    def play_ready(t):
+        import threading
+        import probe
+        state: dict = {}
+        status.config(text=f"Reading video shapes for \u201c{t.name}\u201d\u2026")
+        for b in buttons.values():
+            if isinstance(b, tk.Button):
+                b.config(state="disabled")
+
+        def work():
+            read = lambda files: probe.probe(files, probe.cache_path_for(config_path))
+            _, per = T.gather([t], [], expand, read)
+            state["plan"] = T.plan(t, {}, folder_shapes=per[t.name])
+
+        def wait():
+            plan = state.get("plan")
+            if plan is None:
+                jobs.append(root.after(100, wait))
+                return
+            log.info("start window template %s: %d videos, rows=%s%s", t.name, len(plan.items), plan.rows,
+                     f" ({plan.message})" if plan.message else "")
+            if plan.items:
+                chosen_plan.append(plan)
+                close()
+            else:
+                status.config(text=plan.message[:90])
+                for b in buttons.values():
+                    if isinstance(b, tk.Button):
+                        b.config(state="normal")
+        threading.Thread(target=work, daemon=True).start()
+        jobs.append(root.after(100, wait))
+
+    for i, t in enumerate(ready):
+        button(f"tpl{i}", f"Play template \u201c{t.name}\u201d ({t.count} videos)", lambda t=t: play_ready(t))
     footer = tk.Frame(root, bg=bg)
     footer.pack(fill="x", pady=(u // 2, 0))
     status = tk.Label(footer, text="In the wall: H shows the controls, Esc exits.", bg=bg, fg=dim, font=font(0.9))

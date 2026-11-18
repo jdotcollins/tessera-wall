@@ -17,6 +17,7 @@ Makes a folder of small H.264 clips once (%TEMP%\\tesserawall-p4-clips): 6 x 16:
      pinned video stays
   J. a template with a slot folder of its own (relative path): 2 x 16:9 from the chosen folder above
      3 portrait clips from the other folder
+  K. a template with a folder on every slot is a button in the start window; one click opens it
 """
 import ctypes
 import os
@@ -237,6 +238,30 @@ def main():
         p = run(["--config", cfg_two, "--session", os.path.join(tmp, "s4.json"),
                  "--template", "Two sources", CLIPS])
         r["J_exit"], r["J_added"], r["J_rows"] = p.returncode, added(), last_rows()
+
+        # K. a template with a folder on every slot shows in the start window and opens with one click
+        cfg_ready = os.path.join(tmp, "ready", "config.toml")
+        os.makedirs(os.path.dirname(cfg_ready))
+        open(cfg_ready, "w").close()
+        top = "{ shape = \"landscape\", folder = '%s' }" % CLIPS
+        bottom = "{ shape = \"portrait\", folder = '%s' }" % extra
+        with open(os.path.join(tmp, "ready", "templates.toml"), "w", encoding="utf-8") as f:
+            f.write(f'version = 1\n[[template]]\nname = "Ready made"\n'
+                    f'rows = [[{top}, {top}], [{bottom}, {bottom}, {bottom}]]\n')
+        p = run(["--config", cfg_ready, "--session", os.path.join(tmp, "none.json")], wait=False, exit_after=12)
+        procs.append(p)
+        end, m = time.monotonic() + 8, None
+        while time.monotonic() < end and not m:
+            m = re.search(r"start window tpl0 at (-?\d+),(-?\d+) (\d+)x(\d+)", log_text())
+            time.sleep(0.1)
+        r["K_listed"] = bool(m)
+        if m:
+            x, y, w, h = map(int, m.groups())
+            time.sleep(0.5)
+            click(x + w // 2, y + h // 2)
+            time.sleep(3)
+        r["K_added"], r["K_rows"] = added(), last_rows()
+        r["K_exit"] = p.wait(30)
     finally:
         user32.SetCursorPos(orig.x, orig.y)
         for q in procs:
@@ -269,6 +294,8 @@ def main():
     assert r["J_exit"] == 0 and r["J_rows"] == "[2, 3]" and len(r["J_added"]) == 5, r["J_added"]
     assert land(r["J_added"][:2]) and all(n.startswith("xport") for n in r["J_added"][2:]), \
         "bottom row from the slot folder, top row from the chosen folder"
+    assert r["K_listed"] and r["K_exit"] == 0 and r["K_rows"] == "[2, 3]", "folder-free template in the start window"
+    assert land(r["K_added"][:2]) and all(n.startswith("xport") for n in r["K_added"][2:]) and len(r["K_added"]) == 5
     print("PHASE4 TEST PASSED")
 
 

@@ -95,8 +95,11 @@ rows = [["landscape", "landscape"],
          { shape = "portrait", folder = 'D:\Videos\Phone' }]]
 ```
 
-From the command line: `--template "2x2 landscape" FOLDER`, or `--template best FOLDER`. A template whose
-slots all have their own folders needs no FOLDER.
+A template whose slots *all* have their own folders needs no folder at all: it appears in the start
+window as **Play template "…"** and opens with one click.
+
+From the command line: `--template "2x2 landscape" FOLDER`, or `--template best FOLDER` (no FOLDER for a
+template whose slots all have folders).
 
 Press **H** in the wall for the list of controls, or rest the pointer on the top edge of the screen
 for a small menu bar with *Add videos*, *Add a folder*, *Controls*, *Save wall…*, *Settings* and *Close*.

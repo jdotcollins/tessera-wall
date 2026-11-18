@@ -265,6 +265,9 @@ folder on the development PC still has the old name; nothing depends on it.
     takes the slot folders' shapes as `folder_shapes`. Slots group by (shape, folder), so the "same
     shape, same ratio" rule holds per source. Added as an optional key within format version 1: an
     older Tessera Wall ignores the folder and fills those slots from the chosen folder.
+    Templates with a folder on every slot (`not needs_chosen_folder`, at most 4) are start-window
+    buttons (`tpl0`…): `play_ready` gathers and plans in a thread, disables the buttons meanwhile, and
+    returns the Plan (or shows its message if nothing was found).
   - Choosing (`templates.plan`): the folder's videos are grouped by ratio (3 %). Each distinct slot shape
     takes the single largest matching group, so a 2×2 landscape is four 16:9, never 16:9 mixed with
     4:3; exact ratios pick first, then classes, then `any`; a file is used once. Short of videos: open
