@@ -18,6 +18,8 @@ Makes a folder of small H.264 clips once (%TEMP%\\tesserawall-p4-clips): 6 x 16:
   J. a template with a slot folder of its own (relative path): 2 x 16:9 from the chosen folder above
      3 portrait clips from the other folder
   K. a template with a folder on every slot is a button in the start window; one click opens it
+  L. the start window's "Use a template...": the chooser appears over it (it used to stay invisible and
+     freeze the start window), and Best fit opens the wall
 """
 import ctypes
 import os
@@ -262,6 +264,36 @@ def main():
             time.sleep(3)
         r["K_added"], r["K_rows"] = added(), last_rows()
         r["K_exit"] = p.wait(30)
+
+        # L. the start window's "Use a template..." (folder dialog answered by the test variable): the
+        #    chooser must actually appear over the start window, and a click on Best fit opens the wall
+        if os.path.exists(LOG):
+            os.remove(LOG)
+        p = subprocess.Popen([sys.executable, APP, "--exit-after", "12", "--config", cfg,
+                              "--session", os.path.join(tmp, "none.json")],
+                             env=dict(os.environ, TESSERAWALL_TEST_PICK_FOLDER=CLIPS))
+        procs.append(p)
+        end, m = time.monotonic() + 8, None
+        while time.monotonic() < end and not m:
+            m = re.search(r"start window template at (-?\d+),(-?\d+) (\d+)x(\d+)", log_text())
+            time.sleep(0.1)
+        if m:
+            x, y, w, h = map(int, m.groups())
+            time.sleep(0.5)
+            click(x + w // 2, y + h // 2)
+        end, m = time.monotonic() + 8, None
+        while time.monotonic() < end and not m:
+            m = re.search(r"template window best at (-?\d+),(-?\d+) (\d+)x(\d+)", log_text())
+            time.sleep(0.1)
+        r["L_shown"] = "template window shown: True" in log_text()
+        r["L_laid_out"] = bool(m) and int(m.group(3)) > 1
+        if r["L_laid_out"]:
+            x, y, w, h = map(int, m.groups())
+            time.sleep(0.4)
+            click(x + w // 2, y + h // 2)
+            time.sleep(3)
+        r["L_added"], r["L_rows"] = len(added()), last_rows()
+        r["L_exit"] = p.wait(30)
     finally:
         user32.SetCursorPos(orig.x, orig.y)
         for q in procs:
@@ -296,6 +328,8 @@ def main():
         "bottom row from the slot folder, top row from the chosen folder"
     assert r["K_listed"] and r["K_exit"] == 0 and r["K_rows"] == "[2, 3]", "folder-free template in the start window"
     assert land(r["K_added"][:2]) and all(n.startswith("xport") for n in r["K_added"][2:]) and len(r["K_added"]) == 5
+    assert r["L_shown"] and r["L_laid_out"], "the chooser opened from the start window must be visible"
+    assert r["L_added"] == 4 and r["L_rows"] == "[2, 2]" and r["L_exit"] == 0, (r["L_added"], r["L_rows"])
     print("PHASE4 TEST PASSED")
 
 

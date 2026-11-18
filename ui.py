@@ -376,7 +376,9 @@ def start_window(last_session: list, incoming: queue.Queue, checker: "updates.Ch
             finish(expand([folder]))
 
     def pick_template():
-        folder = filedialog.askdirectory(parent=root, title="Choose a folder of videos for the template")
+        # Tests answer the (native, undrivable) folder dialog through this variable.
+        folder = (os.environ.get("TESSERAWALL_TEST_PICK_FOLDER")
+                  or filedialog.askdirectory(parent=root, title="Choose a folder of videos for the template"))
         if folder:
             plan = template_window([folder], config_path, parent=root)
             if plan and plan.items:
@@ -587,6 +589,10 @@ def template_window(folders: list, config_path: str | None, parent=None) -> "tem
     own = parent is None
     win = make_root() if own else tk.Toplevel(parent)
     win.withdraw()
+    if not own:
+        # Before it is shown: on Windows, making an already visible window transient leaves it unmapped,
+        # so a modal window opened that way never appeared and its grab froze the start window.
+        win.transient(parent)
     win.title("Tessera Wall – templates")
     u = max(12, win.winfo_screenheight() // 90)
     bg, panel, fg, dim, accent = "#101214", "#1B1F24", "#E6E6E6", "#9AA4AF", "#6CB6FF"
@@ -711,7 +717,8 @@ def template_window(folders: list, config_path: str | None, parent=None) -> "tem
     if own:
         win.mainloop()
     else:
-        win.transient(parent)
+        win.update()                    # visible first: a grab on a window that is not shown freezes input
+        log.info("template window shown: %s", bool(win.winfo_ismapped()))
         win.grab_set()
         parent.wait_window(win)
     return result[0] if result else None
