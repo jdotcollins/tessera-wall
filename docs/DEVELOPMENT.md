@@ -28,6 +28,8 @@ folder on the development PC still has the old name; nothing depends on it.
 | `files.py` | Arguments to video paths, Explorer's sort order, the saved session, saved walls |
 | `winapi.py` | The shared `user32` handle, the monitor under the pointer, the Pictures folder |
 | `resources.py` | Graphics memory and free RAM, and whether there is room for one more video |
+| `templates.py` | Template format (built-ins and `templates.toml`), shape matching, choosing files, Best fit |
+| `probe.py`, `probe.lua` | Video shapes before opening: one hidden mpv per batch runs the Lua script; cached in `shapes.json` |
 | `layout.py` | Pure tiling maths: `arrange`, `layout`, `grid`, `panscan_for`, `Rect` |
 | `ipc.py` | mpv JSON-IPC client over a Windows named pipe: pushed property values, non-blocking sends |
 | `config.py` | Setting defaults (`SETTINGS` table), the user's TOML file, locating mpv |
@@ -248,6 +250,34 @@ folder on the development PC still has the old name; nothing depends on it.
   newest for the start window. Ctrl+S and the save dialog: while `Wall.dialog_open` is set, every key
   binding ignores its key, or typing a name would also drive the wall.
 
+- Templates (Phase 4):
+  - Format: `[[template]]` tables with `name` and `rows` (a list of rows, each a list of slot shapes:
+    `landscape` >= 1.2:1, `portrait` <= 1:1.2, `square` between, `any`, or a ratio `"16:9"` / `"2.39"`
+    within 3 %), plus top-level `version` (refused if newer than `FORMAT_VERSION`) and `best_fit_max`.
+    The built-ins are the TOML string `BUILT_IN_TOML`, parsed by the same `parse()` as the user's
+    `templates.toml` (next to the settings file, created with a commented example); a user template with
+    the same name (case and x/× ignored) replaces a built-in. Bad entries are skipped and logged.
+  - Choosing (`templates.plan`): the folder's videos are grouped by ratio (3 %). Each distinct slot shape
+    takes the single largest matching group, so a 2×2 landscape is four 16:9, never 16:9 mixed with
+    4:3; exact ratios pick first, then classes, then `any`; a file is used once. Short of videos: open
+    what was found, `rows=None` (the wall arranges them as usual) and a message shown as the notice.
+  - Best fit (`templates.best_fit`): for every ratio group and count up to `best_fit_max`, the rows from
+    `layout.choose_rows` and the share of the screen that shows picture after the crop limit
+    (`templates.coverage`); the most videos within 3 % of the best coverage wins.
+  - Shapes (`probe.py`): `probe.lua` runs in `mpv.exe --vo=null --ao=null --pause` over a playlist and,
+    on each `file-loaded`, writes the first video track's `demux-w/h`, `demux-rotation` and `demux-par`
+    (container values, no decoding), then `playlist-next`. A file-based script because the bundled mpv
+    has no console `mpv.com`. Four mpv processes side by side; 15 small clips take ~0.2 s. Cache key: the
+    normalised path, checked against size and mtime; files mpv skips are cached as `None`. A batch that
+    takes longer than 10 s + 1 s per file is stopped, and its unread files are not cached.
+  - Wall: `Wall.template_rows` replaces `arrange()` while the tile count equals the template's (adding or
+    closing a video returns to normal layout), keeping the template's order. `Wall.shape_of` (normalised
+    path -> group ratio) makes `swap_random` (N) choose only cached files of that ratio.
+  - Entry points: `--template NAME` (or `best`) plans without asking; `--choose-template` shows
+    `ui.template_window` (Explorer's folder verb `tesserawall-template`); the start window's "Use a
+    template…" opens it modally after a folder dialog. With a wall already open, the new process claims
+    the control pipe with `[]` (detect only), chooses, then hands the chosen files over (rows not applied).
+
 ## GPU driver timeouts
 
 On the development PC (AMD GPU, Windows HDR on) the AMD "driver timeout" popup appeared several times
@@ -299,6 +329,8 @@ bundled pin), Python 3.13, one 2560x1440 monitor at 100% scaling, AMD GPU with H
 - Mouse wheel, `Up` (volume), `x` / `Delete` / middle-click, `0`, dragging along the seek bar.
 - The memory guard against a card actually running out of memory; only its estimate and a pretend
   700 MB card were tested.
+- Templates on rotated phone videos: `demux-rotation` is read but no rotated test file could be made
+  (no ffmpeg here; mpv's encoder writes no rotation). Also folders of hundreds of real files.
 - The installer on a clean PC, or through its interactive wizard (only silent installs were tried).
 - Whether the IPC connect handshake (`MpvIpc._handshake`) actually prevents the lost first message:
   the loss was seen about 1 in 50 connections while players were being resized, but a headless loop
@@ -314,10 +346,12 @@ bundled pin), Python 3.13, one 2560x1440 monitor at 100% scaling, AMD GPU with H
 python test_layout.py
 python test_config.py
 python test_updates.py
+python test_templates.py
 python tests/smoke.py           # every test below takes over the screen, mouse and often keyboard
 python tests/freeze_test.py     # a suspended player must not stall the wall
 python tests/phase2_test.py     # speed, frame step, A-B loop, tracks, snapshot, crash restart
-python tests/phase3_test.py     # memory guard, Shift+Tab focus, sync, Ctrl+S save, saved-wall button
+python tests/phase3_test.py     # memory guard, Tab focus, sync, Ctrl+S save, saved-wall button
+python tests/phase4_test.py     # templates: CLI, Best fit, chooser window, N within shape, short folder
 python tests/add_test.py
 python tests/drop_test.py       # needs tkinterdnd2
 python tests/features_test.py   # writes a 26 MB clip to %TEMP% on first run; other tests reuse it
@@ -339,8 +373,9 @@ python tests/stress_test.py     # GPU driver-timeout check
 
 Notes for anyone running or writing them:
 
-- They need a real desktop, a GPU and mpv, so they cannot run in ordinary CI. The three unit-test
-  files (`test_layout.py`, `test_config.py`, `test_updates.py`) run on GitHub Actions on every push
+- They need a real desktop, a GPU and mpv, so they cannot run in ordinary CI. The four unit-test
+  files (`test_layout.py`, `test_config.py`, `test_updates.py`, `test_templates.py`) run on GitHub
+  Actions on every push
   (`.github/workflows/unit-tests.yml`, Windows, Python 3.11 and 3.13).
 - They move the real pointer. A person using the mouse during a run, or a driver popup appearing over
   the wall, makes them fail. Re-run a failing test alone and read `%TEMP%\tesserawall.log` before

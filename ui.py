@@ -320,6 +320,7 @@ def start_window(last_session: list, incoming: queue.Queue, checker: "updates.Ch
     root.withdraw()                                       # built hidden and shown once, finished
     root.title("Tessera Wall")
     chosen: list = []
+    chosen_plan: list = []                                # a templates.Plan, when a template was chosen
     u = max(12, root.winfo_screenheight() // 90)          # layout unit in pixels; 16 on a 1440p screen
     bg, panel, fg, dim, accent = "#101214", "#1B1F24", "#E6E6E6", "#9AA4AF", "#6CB6FF"
     w, h = u * 42, u * 31
@@ -356,6 +357,14 @@ def start_window(last_session: list, incoming: queue.Queue, checker: "updates.Ch
         folder = filedialog.askdirectory(parent=root, title="Choose a folder of videos")
         if folder:
             finish(expand([folder]))
+
+    def pick_template():
+        folder = filedialog.askdirectory(parent=root, title="Choose a folder of videos for the template")
+        if folder:
+            plan = template_window([folder], config_path, parent=root)
+            if plan and plan.items:
+                chosen_plan.append(plan)
+                close()
 
     tk.Label(root, text="Tessera Wall", bg=bg, fg="white", font=font(2.0, True)).pack(anchor="w")
     tk.Label(root, text="Play several videos at once, side by side.", bg=bg, fg=dim, font=font(1.05)
@@ -400,6 +409,7 @@ def start_window(last_session: list, incoming: queue.Queue, checker: "updates.Ch
 
     button("videos", "Choose videos…", pick_files, primary=True).focus_set()
     button("folder", "Choose a folder…", pick_folder)
+    button("template", "Use a template…", pick_template)
     if last_session:
         n = len(last_session)
         button("resume", f"Reopen last session ({n} video{'s' if n != 1 else ''})", lambda: finish(last_session))
@@ -451,16 +461,31 @@ def start_window(last_session: list, incoming: queue.Queue, checker: "updates.Ch
 
     update_link: list = []
 
+    def fit():
+        """Grow (never shrink) the window to its contents: saved walls, the template button and the
+        update link can add up to more than the design height. The drop zone takes any spare room."""
+        root.update_idletasks()
+        root.geometry(f"{w}x{max(h, root.winfo_reqheight())}")
+
     def show_update(found):
         link = tk.Label(root, text=f"Tessera Wall {found['version']} is available – click here to download it",
                         bg=bg, fg=accent, font=font(0.95, True), cursor="hand2")
         link.pack(anchor="w", pady=(u // 3, 0))
         link.bind("<Button-1>", lambda e: updates.open_release_page(found["url"]))
-        root.geometry(f"{w}x{h + u * 2}")                    # make room without moving the window
         root.update_idletasks()
+        root.geometry(f"{w}x{root.winfo_height() + u * 2}")  # make room without moving the window
         update_link.append(link)
-        log.info("start window update at %d,%d %dx%d: %s", link.winfo_rootx(), link.winfo_rooty(),
-                 link.winfo_width(), link.winfo_height(), found["version"])
+
+        def report():   # once Windows has resized the window; before that the link reads 0,0 1x1
+            try:
+                if link.winfo_width() <= 1:
+                    root.after(30, report)
+                    return
+            except tk.TclError:          # the window was closed meanwhile
+                return
+            log.info("start window update at %d,%d %dx%d: %s", link.winfo_rootx(), link.winfo_rooty(),
+                     link.winfo_width(), link.winfo_height(), found["version"])
+        report()
 
     def check_handed_over():  # files sent by a later launch (right-click, Send To) open the wall
         items = []
@@ -473,6 +498,7 @@ def start_window(last_session: list, incoming: queue.Queue, checker: "updates.Ch
             show_update(checker.result)
         poll[:] = [root.after(150, check_handed_over)]
     poll[:] = [root.after(150, check_handed_over)]
+    fit()
     root.attributes("-alpha", 0.0)
     root.deiconify()
     log.info("start window dark title bar: %s", dark_title_bar(root))
@@ -486,4 +512,143 @@ def start_window(last_session: list, incoming: queue.Queue, checker: "updates.Ch
     fade(root, 1.0, 120)
     root.after(400, lambda: root.attributes("-topmost", False))
     root.mainloop()
-    return chosen or None
+    return chosen_plan[0] if chosen_plan else (chosen or None)
+
+
+def template_window(folders: list, config_path: str | None, parent=None) -> "templates.Plan | None":
+    """Choose a template for the videos in `folders`. Reads the videos' shapes first (cached after the
+    first time, with progress shown), then lists Best fit and every template with how many matching
+    videos it would get. Returns the Plan chosen, or None if the window was closed.
+
+    With `parent` (the start window) it is a modal window over it; without (Explorer's "Play as
+    template" and --choose-template) it is its own window."""
+    import random
+    import threading
+    import probe
+    import templates as T
+
+    own = parent is None
+    win = make_root() if own else tk.Toplevel(parent)
+    win.withdraw()
+    win.title("Tessera Wall – templates")
+    u = max(12, win.winfo_screenheight() // 90)
+    bg, panel, fg, dim, accent = "#101214", "#1B1F24", "#E6E6E6", "#9AA4AF", "#6CB6FF"
+    win.configure(bg=bg, padx=u * 2, pady=u * 2)
+    win.resizable(False, False)
+    font = lambda s=1.0, b=False: ("Segoe UI", -int(u * s), "bold") if b else ("Segoe UI", -int(u * s))
+    result: list = []
+    mx, my, mw, mh = monitor_under_cursor()
+    tpl_path = T.user_file_path(config_path) if config_path else None
+    all_templates, problems, options = T.load_templates(tpl_path)
+    for p in problems:
+        log.warning("templates: %s", p)
+    paths = expand(list(folders))
+    name = ", ".join(os.path.basename(os.path.normpath(f)) or f for f in folders)
+    state = {"done": 0, "total": len(paths), "shapes": None}
+
+    tk.Label(win, text="Choose a template", bg=bg, fg="white", font=font(1.6, True)).pack(anchor="w")
+    tk.Label(win, text=f"{name} – {len(paths)} video{'s' if len(paths) != 1 else ''}", bg=bg, fg=dim,
+             font=font(1.0), wraplength=u * 36, justify="left").pack(anchor="w", pady=(0, u))
+    status = tk.Label(win, text="Reading video shapes…", bg=bg, fg=dim, font=font(0.95))
+    status.pack(anchor="w", pady=(0, u // 2))
+    body = tk.Frame(win, bg=bg)
+    body.pack(fill="x")
+    located: dict = {}
+
+    jobs: list = []                                     # pending after() calls, cancelled on close
+
+    def later(ms, fn):
+        jobs.append(win.after(ms, fn))
+
+    def close(plan=None):
+        if plan:
+            result.append(plan)
+        for job in jobs:
+            try:
+                win.after_cancel(job)
+            except tk.TclError:
+                pass
+        if own:
+            win.destroy()
+        else:
+            win.grab_release()
+            win.destroy()
+
+    def choose(make):
+        plan = make()
+        log.info("template chosen: %s, %d videos, rows=%s%s", plan.name, len(plan.items), plan.rows,
+                 f" ({plan.message})" if plan.message else "")
+        close(plan)
+
+    def entry(key, title, detail, command, enabled=True, primary=False):
+        normal = accent if primary else panel
+        b = tk.Button(body, text=f"{title}   ·   {detail}" if detail else title, font=font(1.0, primary),
+                      relief="flat", bd=0, anchor="w", padx=u, pady=u // 2, cursor="hand2" if enabled else "",
+                      bg=normal, fg="#0B0D0F" if primary else (fg if enabled else "#5C6670"),
+                      activebackground="#8FC8FF" if primary else "#2A3038",
+                      activeforeground="#0B0D0F" if primary else fg,
+                      state="normal" if enabled else "disabled", disabledforeground="#5C6670", command=command)
+        b.pack(fill="x", pady=(0, u // 3))
+        if enabled:
+            hover(b, normal, "#8FC8FF" if primary else "#2A3038")
+        located[key] = b
+
+    def build():
+        shapes = state["shapes"]
+        known = sum(1 for a in shapes.values() if a)
+        status.config(text=f"{known} of {len(shapes)} files are playable videos." if known else
+                      "No playable videos in that folder.")
+        if not known:
+            return
+        most = options.get("best_fit_max", T.BEST_FIT_MAX)
+        preview = T.best_fit(shapes, mw, mh, C.MAX_CROP, C.BALANCE_WEIGHT, most, random.Random(0))
+        entry("best", preview.name, "", lambda: choose(lambda: T.best_fit(
+            shapes, mw, mh, C.MAX_CROP, C.BALANCE_WEIGHT, most)), primary=True)
+        for i, t in enumerate(all_templates):
+            got, need = T.availability(t, shapes)
+            detail = (f"{need} videos" if got == need else f"only {got} of {need} here" if got else
+                      "no matching videos here")
+            entry(f"t{i}", t.name, detail, lambda t=t: choose(lambda: T.plan(t, shapes)), enabled=got > 0)
+        win.update_idletasks()
+        place()
+        win.update()
+        for key, b in located.items():           # positions, so tests can click the real buttons
+            log.info("template window %s at %d,%d %dx%d", key, b.winfo_rootx(), b.winfo_rooty(),
+                     b.winfo_width(), b.winfo_height())
+
+    def work():
+        state["shapes"] = probe.probe(paths, probe.cache_path_for(config_path or C.user_config_path()),
+                                      progress=lambda d, n: state.update(done=d, total=n))
+
+    def poll():
+        if state["shapes"] is not None:
+            build()
+            return
+        status.config(text=f"Reading video shapes… {state['done']} of {state['total']}")
+        later(100, poll)
+
+    def place():
+        win.update_idletasks()
+        w, h = max(win.winfo_reqwidth(), u * 40), win.winfo_reqheight()
+        win.geometry(f"{w}x{h}+{mx + (mw - w) // 2}+{my + (mh - h) // 2}")
+
+    win.bind("<Escape>", lambda e: close())
+    win.protocol("WM_DELETE_WINDOW", close)
+    threading.Thread(target=work, daemon=True).start()
+    place()
+    win.attributes("-alpha", 0.0)
+    win.deiconify()
+    log.info("template window dark title bar: %s", dark_title_bar(win))
+    win.attributes("-topmost", True)
+    win.lift()
+    win.focus_force()
+    fade(win, 1.0, 120)
+    later(400, lambda: win.attributes("-topmost", False))
+    later(100, poll)
+    if own:
+        win.mainloop()
+    else:
+        win.transient(parent)
+        win.grab_set()
+        parent.wait_window(win)
+    return result[0] if result else None

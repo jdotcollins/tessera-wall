@@ -70,6 +70,10 @@ Root: HKCU; Subkey: "Software\Classes\SystemFileAssociations\.{#Ext[i]}\shell\te
 Root: HKCU; Subkey: "Software\Classes\Directory\shell\tesserawall"; ValueType: string; ValueName: ""; ValueData: "Play together in Tessera Wall"; Flags: uninsdeletekey; Tasks: contextmenu
 Root: HKCU; Subkey: "Software\Classes\Directory\shell\tesserawall"; ValueType: string; ValueName: "Icon"; ValueData: """{app}\TesseraWall.exe"""; Tasks: contextmenu
 Root: HKCU; Subkey: "Software\Classes\Directory\shell\tesserawall\command"; ValueType: string; ValueName: ""; ValueData: """{app}\TesseraWall.exe"" ""%1"""; Tasks: contextmenu
+; ... and for choosing a template for that folder.
+Root: HKCU; Subkey: "Software\Classes\Directory\shell\tesserawall-template"; ValueType: string; ValueName: ""; ValueData: "Play as a template in Tessera Wall"; Flags: uninsdeletekey; Tasks: contextmenu
+Root: HKCU; Subkey: "Software\Classes\Directory\shell\tesserawall-template"; ValueType: string; ValueName: "Icon"; ValueData: """{app}\TesseraWall.exe"""; Tasks: contextmenu
+Root: HKCU; Subkey: "Software\Classes\Directory\shell\tesserawall-template\command"; ValueType: string; ValueName: ""; ValueData: """{app}\TesseraWall.exe"" --choose-template ""%1"""; Tasks: contextmenu
 
 [Run]
 Filename: "{app}\TesseraWall.exe"; Description: "Start Tessera Wall now"; Flags: nowait postinstall skipifsilent

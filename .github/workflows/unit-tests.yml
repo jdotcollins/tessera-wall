@@ -28,3 +28,5 @@ jobs:
         run: python test_config.py
       - name: Update check
         run: python test_updates.py
+      - name: Templates
+        run: python test_templates.py

@@ -108,6 +108,7 @@ not apply to it. mpv comes with no warranty.
 Tessera Wall also includes Python (PSF licence), Tcl/Tk (BSD-style licence), tkinterdnd2 (MIT) and tkdnd (BSD).
 "@ | Set-Content (Join-Path $app 'THIRD-PARTY-NOTICES.txt') -Encoding utf8
 Copy-Item tesserawall.ico, tesserawall.png $app -Force          # window icons, loaded by set_icon() at run time
+Copy-Item probe.lua $app -Force                                 # mpv script used by probe.py (templates)
 Copy-Item LICENSE (Join-Path $app 'LICENSE.txt') -Force
 Copy-Item VERSION (Join-Path $app 'VERSION') -Force     # read by the update check (updates.current_version)
 Copy-Item README.md (Join-Path $app 'README.md') -Force

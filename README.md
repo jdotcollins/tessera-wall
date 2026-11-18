@@ -43,12 +43,40 @@ puts a shortcut on the Desktop. `install.ps1 -Uninstall` removes them. Re-run it
 ## Use
 
 - Start Tessera Wall with nothing selected and a small window asks what to play: drop videos or folders on
-  it, choose them with a button, reopen the last session where you left it, or open a wall you saved.
+  it, choose them with a button, use a template, reopen the last session where you left it, or open a
+  wall you saved.
 - Or select videos or a folder in Explorer, right-click, and choose **Play together in Tessera Wall**
   or **Send to > Tessera Wall** (on Windows 11 both are under *Show more options*).
 - Or drop them on the Desktop shortcut. Doing either while a wall is open adds to it.
 - **Send to > Tessera Wall (random 6)** opens six random videos from the selection.
-- Command line: `pythonw tesserawall.pyw [--random N] [--resume] FILE_OR_FOLDER...`
+- Command line: `pythonw tesserawall.pyw [--random N] [--resume] [--template NAME] FILE_OR_FOLDER...`
+
+### Templates
+
+A template opens videos of matching shapes from a folder, picked at random, in fixed rows: for example
+four 16:9 videos in a 2×2 grid, or four portrait videos side by side. Choose **Use a template…** in the
+start window, or right-click a folder and choose **Play as a template in Tessera Wall** (on Windows 11
+under *Show more options*). The first time, Tessera Wall reads every video's shape, which takes a moment
+for a large folder; after that it remembers.
+
+- **Best fit** looks at what the folder holds and picks the shape and number of videos that fill your
+  screen best (at most 9; `best_fit_max` in the templates file).
+- Built in: 2×2, 3×3 and 4×4 landscape; 3 or 4 portrait in a row; 2 square side by side; one landscape
+  above three portrait.
+- If the folder does not have enough matching videos, the wall opens what it found and says so.
+- **N** in a template wall swaps in another random video *of the same shape*, so the rows keep fitting.
+
+Your own templates go in `%APPDATA%\TesseraWall\templates.toml` (created with an example). Each row lists
+the shape of each slot, `landscape`, `portrait`, `square`, `any` or an exact ratio such as `"16:9"` or
+`"2.39"`:
+
+```toml
+[[template]]
+name = "Big one, four small"
+rows = [["landscape"], ["landscape", "landscape", "landscape", "landscape"]]
+```
+
+From the command line: `--template "2x2 landscape" FOLDER`, or `--template best FOLDER`.
 
 Press **H** in the wall for the list of controls, or rest the pointer on the top edge of the screen
 for a small menu bar with *Add videos*, *Add a folder*, *Controls*, *Save wall…*, *Settings* and *Close*.
@@ -70,7 +98,7 @@ of the whole PC slowing to a crawl.
 | `R` | Restart all from the beginning |
 | `Up` `Down` | Volume of the focused video (remembered per video) |
 | `Page Down` / `Page Up` | Next / previous file from the focused video's folder |
-| `N` | Swap the focused video for a random one from its folder |
+| `N` | Swap the focused video for a random one from its folder (same shape, in a template wall) |
 | `G` | Sync: every video follows the focused one (pause, seek, speed, frame steps); again to stop |
 | `[` `]` / `Backspace` | Slower / faster; back to normal speed |
 | `,` `.` | Step one frame back / forward |

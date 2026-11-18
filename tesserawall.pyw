@@ -27,14 +27,35 @@ from tkinter import messagebox
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 import config as C
+import probe
+import templates as T
 import updates
 from files import SESSION_PATH, expand, explorer_sorted, load_session  # expand: tests load this file by path and call it
 from instance import claim_control_pipe, gather_batch, listen
-from ui import enable_drop, make_root, start_window
+from ui import enable_drop, make_root, start_window, template_window
 from wall import Wall
 from winapi import monitor_under_cursor
 
 log = logging.getLogger("tesserawall")
+
+
+def choose_plan(ns, config_path: str):
+    """--choose-template: the chooser window. --template NAME: read the shapes and plan without asking.
+    Returns a templates.Plan (possibly with no items and a message saying why), or None if closed."""
+    if ns.choose_template:
+        return template_window(ns.paths, config_path)
+    files = expand(ns.paths)
+    shapes = probe.probe(files, probe.cache_path_for(config_path))
+    found, problems, options = T.load_templates(T.user_file_path(config_path))
+    for p in problems:
+        log.warning("templates: %s", p)
+    if T.normalise_name(ns.template) in T.BEST_NAMES:
+        _, _, mw, mh = monitor_under_cursor()
+        return T.best_fit(shapes, mw, mh, C.MAX_CROP, C.BALANCE_WEIGHT, options.get("best_fit_max", T.BEST_FIT_MAX))
+    t = T.find(found, ns.template)
+    if not t:
+        return T.Plan(ns.template, [], None, {}, f"There is no template called “{ns.template}”.")
+    return T.plan(t, shapes)
 
 
 def main():
@@ -45,6 +66,10 @@ def main():
     ap.add_argument("--random", type=int, default=0, metavar="N",
                     help="open only N randomly chosen videos from the given files/folders")
     ap.add_argument("--config", default=None, help="settings file to use instead of the default")
+    ap.add_argument("--template", default=None, metavar="NAME",
+                    help='open the given folders through a template, e.g. "2x2 landscape" or "best"')
+    ap.add_argument("--choose-template", action="store_true",
+                    help="show the template chooser for the given folders (Explorer's Play as template)")
     ap.add_argument("paths", nargs="*")
     ns = ap.parse_args()
 
@@ -70,8 +95,15 @@ def main():
     if 0 < ns.random < len(paths):
         paths = random.sample(paths, ns.random)
 
-    listener = claim_control_pipe(paths)
+    use_template = bool(ns.template or ns.choose_template)
+    if use_template and not ns.exit_after > 0:
+        T.ensure_user_file(T.user_file_path(config_path))
+    listener = claim_control_pipe([] if use_template else paths)   # [] only checks for a running wall
     if listener is None:
+        if use_template:  # a wall is open: choose here, then hand the chosen videos to it
+            plan = choose_plan(ns, config_path)
+            if plan and plan.items:
+                claim_control_pipe(plan.items)
         return 0  # handed to the wall that is already running
     claimed_at = time.monotonic()
     # From here on later launches queue their files here, even while the start window is open.
@@ -95,6 +127,19 @@ def main():
     checker = updates.Checker(os.path.join(os.path.dirname(os.path.abspath(config_path)), "update.json"))
 
     session_path = ns.session or SESSION_PATH
+    plan = None
+    if use_template:
+        plan = choose_plan(ns, config_path)
+        if not plan or not plan.items:
+            why = plan.message if plan else "template window closed"
+            log.info("template: nothing to open (%s)", why)
+            if plan and not ns.exit_after > 0:
+                box = tk.Tk()
+                box.withdraw()
+                messagebox.showinfo("Tessera Wall", why)
+                box.destroy()
+            return 0
+        paths = list(plan.items)
     if ns.resume:  # reopen what was open last time, at the same positions
         paths = load_session(session_path) + paths
     if not paths:  # started with nothing to play (Start Menu, desktop icon): show the front door
@@ -102,6 +147,13 @@ def main():
         if not paths:
             log.info("start window closed without a selection")
             return 0
+        if isinstance(paths, T.Plan):
+            plan, paths = paths, list(paths.items)
+    if plan:
+        log.info("template plan: %s, %d videos, rows=%s%s", plan.name, len(plan.items), plan.rows,
+                 f" ({plan.message})" if plan.message else "")
+        if plan.message and not notice:
+            notice = plan.message
     root = make_root()
 
     root.title("Tessera Wall")
@@ -133,7 +185,8 @@ def main():
     early = []  # anything handed over while starting up goes after our own files
     while not incoming.empty():
         early.append(incoming.get_nowait())
-    if len(ns.paths) == 1 and not (ns.resume or ns.random) and all(isinstance(p, str) for p in paths):
+    if (len(ns.paths) == 1 and not (ns.resume or ns.random or plan)
+            and all(isinstance(p, str) for p in paths)):
         # Possibly the first of a multi-file right-click: wait for the siblings (this overlaps
         # with the window appearing) and show the whole batch in Explorer's name order.
         early += gather_batch(incoming, claimed_at)
@@ -145,6 +198,9 @@ def main():
         incoming.put(p)
     wall = Wall(root, incoming)
     wall.config_path, wall.notice, wall.updates = config_path, notice, checker
+    if plan:
+        wall.template_rows = plan.rows
+        wall.shape_of = {os.path.normcase(p): r for p, r in plan.shape_of.items()}
     # Test runs (--exit-after) must not overwrite the real session unless a file is named explicitly.
     wall.session_path = None if (ns.exit_after > 0 and not ns.session) else session_path
     wall.bind_keys()

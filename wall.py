@@ -2,6 +2,7 @@
 import ctypes
 import json
 import logging
+import math
 import os
 import queue
 import random
@@ -24,7 +25,9 @@ from layout import panscan_for
 import config as C
 import updates
 from files import expand, save_wall
+import probe
 import resources
+import templates
 from ui import fade, hover, round_corners, settings_window
 from winapi import GA_ROOT, pictures_folder, user32
 
@@ -164,6 +167,10 @@ class Wall:
         self.sync = False             # G: every video follows the focused one
         self.sync_checked = 0.0
         self.refused: list[str] = []  # reasons videos were not opened (memory guard), not yet shown
+        # Template (set by main): rows used while the wall holds exactly that many videos, and the ratio
+        # group of each file it opened, so N swaps within the same shape.
+        self.template_rows: list[int] | None = None
+        self.shape_of: dict[str, float] = {}
         self.ring = tk.Frame(root, bg="#6CB6FF", highlightthickness=0, bd=0)   # focus outline
         self.top_since: float | None = None   # when the pointer reached the top edge
         self.dialog_open = False
@@ -292,7 +299,11 @@ class Wall:
         self.need_layout = False
         if not self.tiles:
             return
-        if rearrange or sum(self.rows) != len(self.tiles):
+        if self.template_rows and sum(self.template_rows) == len(self.tiles):
+            if self.rows != self.template_rows or self.columns:
+                log.info("template rows %s", self.template_rows)
+            self.rows, self.columns = list(self.template_rows), False   # tiles keep the template's order
+        elif rearrange or sum(self.rows) != len(self.tiles):
             order, self.columns, self.rows = arrange([t.aspect for t in self.tiles], self.W, self.H,
                                                      self.max_crop, C.BALANCE_WEIGHT,
                                                      allow_reorder=not self.manual_order)
@@ -518,10 +529,19 @@ class Wall:
             return
         open_now = {os.path.normcase(x.path) for x in self.tiles}
         pool = [p for p in expand([os.path.dirname(t.path)]) if os.path.normcase(p) not in open_now]
+        shape = self.shape_of.get(os.path.normcase(t.path))
+        if shape and pool:   # opened by a template: stay within its shape so the rows keep fitting
+            known = probe.cached(pool, probe.cache_path_for(self.config_path))
+            pool = [p for p in pool if known.get(p) and
+                    abs(math.log(known[p] / shape)) <= math.log(1 + templates.TOLERANCE)]
         if not pool:
-            t.ipc.post("show-text", "No other videos in this folder")
+            t.ipc.post("show-text", "No other videos of this shape in this folder" if shape
+                       else "No other videos in this folder")
             return
-        self.load_into(t, random.choice(pool))
+        new = random.choice(pool)
+        if shape:
+            self.shape_of[os.path.normcase(new)] = shape
+        self.load_into(t, new)
 
     def step_file(self, direction: int):
         """Page Down / Page Up: load the next / previous video from the focused tile's folder.

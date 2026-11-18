@@ -188,10 +188,10 @@ def main():
                 q.kill()
     for k, v in r.items():
         print(f"{k:28} {v}")
-    assert r["widgets_with_session"] == ["drop", "folder", "resume", "settings", "videos"]
+    assert r["widgets_with_session"] == ["drop", "folder", "resume", "settings", "template", "videos"]
     assert r["resume_tiles"] == 2 and r["resume_exit"] == 0
     assert r["resume_positions"][0] >= 11 and r["resume_positions"][1] < 11, "resume should restore positions"
-    assert r["widgets_without_session"] == ["drop", "folder", "settings", "videos"], "no resume button without a session"
+    assert r["widgets_without_session"] == ["drop", "folder", "settings", "template", "videos"], "no resume button without a session"
     assert r["drop_tiles"] == 1 and r["drop_exit"] == 0, "dropping a file on the start window should open it"
     assert r["dark_title_bar"], "the start window should get a dark title bar"
     assert r["drop_zone_lit"], "dragging files over the window should light up the drop zone"
