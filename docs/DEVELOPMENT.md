@@ -238,9 +238,11 @@ folder on the development PC still has the old name; nothing depends on it.
   while on, `Wall.cmd` sends speed and frame-step commands to all, `Space` sets one pause state on all,
   seeks go to all, and `keep_in_sync` (every second from `tick`) re-seeks any video more than 0.25 s
   away from the focused one. Meant for videos of the same length (several angles of one event).
-- Tab focus: `Wall.move_focus` returns `"break"` so tk's own focus traversal never runs. On the
-  development PC a synthetic bare `Tab` never reaches any tk window (Shift+Tab does), so the test
-  drives it with Shift+Tab; plain Tab was not verified by a test.
+- Tab focus: `Wall.move_focus`, bound with `self.root.bind`, not `bind_all`. Tk defines `<<NextWindow>>`
+  as `<Key-Tab>`, and its own `<<NextWindow>>` binding on the `all` tag wins over `bind_all("<Tab>")`,
+  which then silently never fires (0.4.0 shipped with that bug; Shift+Tab worked). The wall window's
+  own tag is checked before `all`, and `"break"` skips Tk's traversal; the Settings window and dialogs
+  are other toplevels, so they keep ordinary Tab between fields.
 - Saved walls: `files.save_wall` writes `{"name", "videos": [{"path", "pos"}]}` to a `walls` folder
   next to the settings file (so a test's `--config` keeps them separate); `list_walls` returns the four
   newest for the start window. Ctrl+S and the save dialog: while `Wall.dialog_open` is set, every key
@@ -294,8 +296,7 @@ bundled pin), Python 3.13, one 2560x1440 monitor at 100% scaling, AMD GPU with H
 
 - Any other machine: other GPUs, Windows 10, other DPI scaling, HDR off, more than one monitor.
 - Ordinary compressed files in everyday use beyond one manual session; the tests use generated clips.
-- Mouse wheel, `Up` (volume), `x` / `Delete` / middle-click, `0`, dragging along the seek bar,
-  plain `Tab` (see Tab focus above).
+- Mouse wheel, `Up` (volume), `x` / `Delete` / middle-click, `0`, dragging along the seek bar.
 - The memory guard against a card actually running out of memory; only its estimate and a pretend
   700 MB card were tested.
 - The installer on a clean PC, or through its interactive wizard (only silent installs were tried).

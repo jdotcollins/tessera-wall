@@ -105,12 +105,11 @@ def main():
         x, y, w, h = rects[0]
         click(x + w // 2, y + h // 2)                         # pin video 0, keyboard focus to the wall
         assert foreground_is(p.pid), "wall is not the foreground window; not sending keys"
-        # Shift+Tab only: on the development PC a synthetic bare Tab never reaches any tk window (a minimal
-        # tk probe gets Shift+Tab and letters but not Tab), so plain Tab is checked by hand. Same move_focus.
-        press(VK_TAB, (VK_SHIFT,))
+        press(VK_TAB)
+        press(VK_TAB)
         press(VK_TAB, (VK_SHIFT,))
         r["B_pins"] = re.findall(r"pin -> (\d+)", log_text())
-        press(VK_TAB, (VK_SHIFT,))                            # wraps back to video 0
+        press(VK_TAB, (VK_SHIFT,))                            # back on video 0
         ipc[2].command("seek", 8, "relative")                # put video 2 eight seconds ahead
         time.sleep(0.3)
         r["B_before_sync"] = pos()
@@ -160,7 +159,7 @@ def main():
     for k, v in r.items():
         print(f"{k:24} {v}")
     assert r["A_exit"] == 0 and r["A_opened"] == 3 and r["A_refused"] == 3 and r["A_reported"]
-    assert r["B_pins"][-3:] == ["0", "2", "1"], r["B_pins"]
+    assert r["B_pins"][-3:] == ["1", "2", "1"], r["B_pins"]
     spread = max(r["B_after_sync"]) - min(r["B_after_sync"])
     assert max(r["B_before_sync"]) - min(r["B_before_sync"]) > 5 and spread < 0.6, "G should line the videos up"
     assert r["B_paused"] == [True, True, True], "Space in sync mode pauses every video"

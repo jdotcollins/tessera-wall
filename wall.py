@@ -1152,8 +1152,12 @@ class Wall:
         b("<a>", lambda e: self.cycle_track("audio"))
         b("<p>", lambda e: self.snapshot())
         b("<g>", lambda e: self.toggle_sync())
-        bind_all("<Tab>", lambda e: None if self.dialog_open else self.move_focus(1))
-        bind_all("<Shift-Tab>", lambda e: None if self.dialog_open else self.move_focus(-1))
+        # Bound on the wall window, not with bind_all: Tk defines <<NextWindow>> as <Key-Tab>, and its own
+        # <<NextWindow>> binding on "all" wins over a bind_all("<Tab>"), which then never fires. The wall
+        # window's tag comes before "all", and returning "break" skips Tk's traversal there, while the
+        # Settings window and dialogs keep ordinary Tab between their fields.
+        self.root.bind("<Tab>", lambda e: self.move_focus(1))
+        self.root.bind("<Shift-Tab>", lambda e: self.move_focus(-1))
         for seq in ("<Control-s>", "<Control-S>"):
             bind_all(seq, lambda e: None if self.dialog_open else self.save_wall_as())
         b("<F5>", lambda e: self.reload_config())
