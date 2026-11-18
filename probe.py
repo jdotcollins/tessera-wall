@@ -130,8 +130,13 @@ def probe(paths: list[str], cache_path: str, progress=None, mpv: str | None = No
                 f.write("\n".join(batch) + "\n")
             # --idle=no / --keep-open=no: started without a console, mpv applies its pseudo-gui profile
             # (idle=once) and would otherwise stay running after the last file.
+            # Less work per file, which matters on real (large) files: no audio or subtitle tracks, no
+            # read-ahead while paused (it would read megabytes of each file), and no listing the folder
+            # for matching subtitle / audio / cover files. The video track must stay selected: with
+            # nothing selected mpv gives up on the file before file-loaded.
             args = [mpv, "--no-config", "--vo=null", "--ao=null", "--pause", "--idle=no", "--keep-open=no",
-                    "--ytdl=no",
+                    "--ytdl=no", "--aid=no", "--sid=no", "--cache=no", "--demuxer-readahead-secs=0",
+                    "--sub-auto=no", "--audio-file-auto=no", "--cover-art-auto=no",
                     "--msg-level=all=no", "--load-scripts=no", f"--script={script}",
                     f"--script-opts=tw-out={out}", f"--playlist={playlist}"]
             try:
