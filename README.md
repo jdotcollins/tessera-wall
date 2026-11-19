@@ -149,7 +149,7 @@ of the whole PC slowing to a crawl.
 | `C` | Crop: limited, fill, fit |
 | `S` | Settings |
 | `Ctrl+S` | Save this wall under a name, to open it again from the start window |
-| `Ctrl+V` | Open the links (YouTube, Twitch, stream addresses) or files on the clipboard |
+| `Ctrl+V` | Open the links (YouTube, Twitch, stream addresses) on the clipboard, or files and folders copied in Explorer |
 | `Ctrl+B` | Black out: hide, pause and mute everything; `Ctrl+B` or `Esc` brings it all back |
 | `F5` | Reload the settings file |
 | `U` | Open the download page, when a newer version is available |

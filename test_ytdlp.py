@@ -66,6 +66,56 @@ def test_self_update_only_when_allowed():
         Y.bundled_path = saved[2]
 
 
+def test_clipboard_items():
+    import ui
+    folder = tempfile.mkdtemp(prefix="tesserawall-clip-")
+    for name in ("a.mp4", "b.mkv", "notes.txt"):
+        open(os.path.join(folder, name), "w").close()
+    got = ui.items_from_clipboard("https://ignored.example/x.m3u8", [folder])
+    assert sorted(os.path.basename(p) for p in got) == ["a.mp4", "b.mkv"], "copied files win; folders expanded"
+    assert ui.items_from_clipboard("see https://a.b/c.m3u8", []) == ["https://a.b/c.m3u8"]
+    assert ui.items_from_clipboard("", []) == []
+
+
+def test_paste_never_blocks_the_ui():
+    """A clipboard owner that never answers: the Tk thread keeps running and done(None) comes after the
+    timeout; a normal read arrives as a list."""
+    import threading
+    import tkinter as tk
+    import ui
+    saved = ui.read_clipboard, ui.PASTE_TIMEOUT_MS
+    hang = threading.Event()
+    root = tk.Tk()
+    root.withdraw()
+    try:
+        got, ticks = [], [0]
+
+        def tick():
+            ticks[0] += 1
+            root.after(20, tick)
+        tick()
+        ui.read_clipboard, ui.PASTE_TIMEOUT_MS = (lambda: (hang.wait(), ("", []))[1]), 400
+        ui.paste_async(root, got.append)
+        start = time.monotonic()
+        while not got and time.monotonic() - start < 3:
+            root.update()
+            time.sleep(0.01)
+        assert got == [None], got
+        assert ticks[0] >= 10, f"the Tk loop kept running while the clipboard hung ({ticks[0]} ticks)"
+        got.clear()
+        ui.read_clipboard = lambda: ("https://a.b/c.m3u8", [])
+        ui.paste_async(root, got.append)
+        start = time.monotonic()
+        while not got and time.monotonic() - start < 3:
+            root.update()
+            time.sleep(0.01)
+        assert got == [["https://a.b/c.m3u8"]], got
+    finally:
+        hang.set()
+        ui.read_clipboard, ui.PASTE_TIMEOUT_MS = saved
+        root.destroy()
+
+
 if __name__ == "__main__":
     for name, fn in list(globals().items()):
         if name.startswith("test_"):

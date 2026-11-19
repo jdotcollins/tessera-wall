@@ -323,8 +323,12 @@ folder on the development PC still has the old name; nothing depends on it.
   `--script-opts-append=ytdl_hook-ytdl_path=…` pointing at `yt-dlp\yt-dlp.exe` beside the app (pinned
   version and SHA-256 in `build.ps1`, Unlicense, listed in THIRD-PARTY-NOTICES), or `ytdlp_path`, or
   PATH. The seek-bar label shows mpv's `media-title` for links. Links come in by command line, Send To,
-  Ctrl+V (`ui.pasted_items`) and browser drops (`DND_TEXT`, `ui.dropped_items`), all through
-  `ytdlp.links_from_text`. `update_in_background` runs `yt-dlp -U` at most weekly in a thread (state in
+  Ctrl+V (`ui.paste_async`) and browser drops (`DND_TEXT`, `ui.dropped_items`), all through
+  `ytdlp.links_from_text`. Ctrl+V never calls Tk's `clipboard_get` on the Tk thread: an app that renders
+  its clipboard data on request makes that call wait until it answers (~30 s if it is busy or hung), so
+  a worker thread reads the clipboard through Win32 (`winapi.read_clipboard`: CF_HDROP for files copied
+  in Explorer, else CF_UNICODETEXT) and lists any folders; the Tk thread polls for the result and gives
+  up after 5 s with "not answering". `update_in_background` runs `yt-dlp -U` at most weekly in a thread (state in
   `ytdlp.json`), only for the bundled copy, never with `update_check = false` or in `--exit-after` runs.
   Verified (hidden mpv): Mux and Apple HLS test streams; YouTube at 1080p without a JavaScript runtime
   (yt-dlp warns that this is deprecated; Deno would then be needed, ~100 MB). Twitch reached the

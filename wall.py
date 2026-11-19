@@ -30,7 +30,7 @@ import probe
 import resources
 import templates
 import ytdlp
-from ui import fade, hover, pasted_items, round_corners, settings_window
+from ui import fade, hover, paste_async, round_corners, settings_window
 from winapi import GA_ROOT, pictures_folder, user32
 
 log = logging.getLogger("tesserawall")
@@ -1143,15 +1143,22 @@ class Wall:
                 log.info("sync: corrected %.2fs drift", drift)
 
     def paste(self):
-        """Ctrl+V: open the links (YouTube, Twitch, stream addresses...) or file paths on the clipboard."""
-        items = pasted_items(self.root)
-        target = self.focus or (self.tiles[0] if self.tiles else None)
-        log.info("pasted %d item(s)", len(items))
-        if target and target.ipc:
-            target.ipc.post("show-text", f"Opening {len(items)} pasted video{'s' if len(items) != 1 else ''}"
-                            if items else "Nothing to play on the clipboard", 2000)
-        for item in items:
-            self.incoming.put(item)
+        """Ctrl+V: open the links (YouTube, Twitch, stream addresses...), paths, or files copied in Explorer
+        that are on the clipboard. Read in a worker thread so a slow clipboard owner cannot freeze the wall."""
+        def done(items):
+            target = self.focus or (self.tiles[0] if self.tiles else None)
+            log.info("pasted %s item(s)", "no answer" if items is None else len(items))
+            if items is None:
+                msg = "The app that copied this is not answering"
+            elif items:
+                msg = f"Opening {len(items)} pasted video{'s' if len(items) != 1 else ''}"
+            else:
+                msg = "Nothing to play on the clipboard"
+            if target and target.ipc:
+                target.ipc.post("show-text", msg, 2000)
+            for item in items or []:
+                self.incoming.put(item)
+        paste_async(self.root, done)
 
     def focus_number(self, n: int):
         """1-9: focus and pin the n-th video (wall order: rows top to bottom, left to right); the same

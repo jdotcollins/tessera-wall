@@ -12,7 +12,7 @@ import config as C
 import updates
 from files import expand, list_walls
 from ytdlp import links_from_text
-from winapi import GA_ROOT, monitor_under_cursor, user32
+from winapi import GA_ROOT, monitor_under_cursor, read_clipboard, user32
 
 log = logging.getLogger("tesserawall")
 
@@ -24,13 +24,45 @@ def dropped_items(root, data: str) -> list:
     return expand(list(root.tk.splitlist(data)))
 
 
-def pasted_items(root) -> list:
-    """Links and paths on the clipboard (Ctrl+V): one per line or separated by spaces."""
-    try:
-        text = root.clipboard_get()
-    except tk.TclError:
-        return []
+def items_from_clipboard(text: str, files: list) -> list:
+    """What Ctrl+V plays: files copied in Explorer (folders expanded), else the links and paths in the text."""
+    if files:
+        return expand(files)
     return [i for item in links_from_text(text) for i in ([item] if "://" in item else expand([item]))]
+
+
+PASTE_TIMEOUT_MS = 5000
+
+
+def paste_async(root, done):
+    """Ctrl+V without freezing: read the clipboard (and list any copied folders) in a worker thread, then call
+    done(items) on the Tk thread, or done(None) if the app that owns the clipboard has not answered within
+    PASTE_TIMEOUT_MS (the worker is then abandoned; it ends when that app answers or Windows gives up)."""
+    import threading
+    import time
+    result = queue.Queue()
+
+    def work():
+        try:
+            result.put(items_from_clipboard(*read_clipboard()))
+        except Exception as e:
+            log.warning("clipboard read failed: %s", e)
+            result.put([])
+    threading.Thread(target=work, daemon=True, name="paste").start()
+    deadline = time.monotonic() + PASTE_TIMEOUT_MS / 1000
+
+    def poll():
+        try:
+            items = result.get_nowait()
+        except queue.Empty:
+            if time.monotonic() < deadline:
+                root.after(50, poll)
+            else:
+                log.info("clipboard: no answer from the app that owns it")
+                done(None)
+            return
+        done(items)
+    root.after(20, poll)
 
 
 def enable_drop(root, incoming: queue.Queue):
@@ -537,12 +569,20 @@ def start_window(last_session: list, incoming: queue.Queue, checker: "updates.Ch
     root.protocol("WM_DELETE_WINDOW", close)
 
     def paste(e=None):
-        items = pasted_items(root)
-        log.info("start window paste: %d item(s)", len(items))
-        if items:
-            finish(items)
-        else:
-            status.config(text="Nothing to play on the clipboard: copy a video link or file first.")
+        def done(items):
+            try:
+                if not root.winfo_exists():
+                    return
+            except tk.TclError:
+                return
+            log.info("start window paste: %s item(s)", "no answer" if items is None else len(items))
+            if items:
+                finish(items)
+            elif items is None:
+                status.config(text="The app that copied this is not answering. Try copying it again.")
+            else:
+                status.config(text="Nothing to play on the clipboard: copy a video link or file first.")
+        paste_async(root, done)
     for seq in ("<Control-v>", "<Control-V>"):
         root.bind(seq, paste)
 

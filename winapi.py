@@ -37,6 +37,53 @@ def pictures_folder() -> str:
     return os.path.join(os.path.expanduser("~"), "Pictures")
 
 
+CF_UNICODETEXT, CF_HDROP = 13, 15
+
+
+def read_clipboard() -> tuple[str, list]:
+    """(text, files) on the clipboard: copied text, and files copied in Explorer. Win32 directly rather than
+    Tk, so it can run in a worker thread: getting data that the owning app renders on request blocks until
+    that app answers, which must not freeze the wall."""
+    import time
+    k32, shell32 = ctypes.windll.kernel32, ctypes.windll.shell32
+    user32.OpenClipboard.argtypes = [wintypes.HWND]
+    user32.GetClipboardData.restype = wintypes.HANDLE
+    user32.GetClipboardData.argtypes = [wintypes.UINT]
+    user32.IsClipboardFormatAvailable.argtypes = [wintypes.UINT]
+    k32.GlobalLock.restype = ctypes.c_void_p
+    k32.GlobalLock.argtypes = [wintypes.HGLOBAL]
+    k32.GlobalUnlock.argtypes = [wintypes.HGLOBAL]
+    shell32.DragQueryFileW.restype = wintypes.UINT
+    shell32.DragQueryFileW.argtypes = [wintypes.HANDLE, wintypes.UINT, wintypes.LPWSTR, wintypes.UINT]
+    for _ in range(10):                      # another app may hold the clipboard for a moment
+        if user32.OpenClipboard(None):
+            break
+        time.sleep(0.05)
+    else:
+        log.info("clipboard: could not open it")
+        return "", []
+    text, files = "", []
+    try:
+        if user32.IsClipboardFormatAvailable(CF_HDROP):
+            drop = user32.GetClipboardData(CF_HDROP)
+            if drop:
+                for i in range(shell32.DragQueryFileW(drop, 0xFFFFFFFF, None, 0)):
+                    buf = ctypes.create_unicode_buffer(shell32.DragQueryFileW(drop, i, None, 0) + 1)
+                    shell32.DragQueryFileW(drop, i, buf, len(buf))
+                    files.append(buf.value)
+        if user32.IsClipboardFormatAvailable(CF_UNICODETEXT):
+            handle = user32.GetClipboardData(CF_UNICODETEXT)
+            ptr = k32.GlobalLock(handle) if handle else None
+            if ptr:
+                try:
+                    text = ctypes.wstring_at(ptr)
+                finally:
+                    k32.GlobalUnlock(handle)
+    finally:
+        user32.CloseClipboard()
+    return text, files
+
+
 def monitor_under_cursor() -> tuple[int, int, int, int]:
     """(x, y, width, height) in real pixels of the monitor the pointer is on."""
     user32.MonitorFromPoint.restype = wintypes.HANDLE
