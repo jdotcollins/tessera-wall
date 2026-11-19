@@ -11,17 +11,35 @@ from tkinter import filedialog
 import config as C
 import updates
 from files import expand, list_walls
+from ytdlp import links_from_text
 from winapi import GA_ROOT, monitor_under_cursor, user32
 
 log = logging.getLogger("tesserawall")
 
 
-def enable_drop(root, incoming: queue.Queue):
-    """Optional: accept files dropped on the running wall. Needs `pip install tkinterdnd2`."""
+def dropped_items(root, data: str) -> list:
+    """What a drop carries: files and folders from Explorer, or a link (text) dragged from a browser."""
+    if "://" in data:
+        return [i for item in links_from_text(data) for i in ([item] if "://" in item else expand([item]))]
+    return expand(list(root.tk.splitlist(data)))
+
+
+def pasted_items(root) -> list:
+    """Links and paths on the clipboard (Ctrl+V): one per line or separated by spaces."""
     try:
-        from tkinterdnd2 import DND_FILES
-        root.drop_target_register(DND_FILES)
-        root.dnd_bind("<<Drop>>", lambda e: [incoming.put(p) for p in expand(list(root.tk.splitlist(e.data)))])
+        text = root.clipboard_get()
+    except tk.TclError:
+        return []
+    return [i for item in links_from_text(text) for i in ([item] if "://" in item else expand([item]))]
+
+
+def enable_drop(root, incoming: queue.Queue):
+    """Optional: accept files, and links dragged from a browser, dropped on the running wall.
+    Needs `pip install tkinterdnd2`."""
+    try:
+        from tkinterdnd2 import DND_FILES, DND_TEXT
+        root.drop_target_register(DND_FILES, DND_TEXT)
+        root.dnd_bind("<<Drop>>", lambda e: [incoming.put(p) for p in dropped_items(root, e.data)])
         log.info("drag-and-drop enabled")
     except Exception as e:
         log.info("drag-and-drop onto the wall disabled: %s", e)
@@ -406,9 +424,9 @@ def start_window(last_session: list, incoming: queue.Queue, checker: "updates.Ch
                               fill="#18263A" if lit else ("#1F242B" if warm else panel))
         drop.create_text(w_ // 2, h_ // 2 - u // 2, fill=accent if lit else fg, font=font(1.3),
                          text="Release to play" if lit else
-                         ("Drop videos or folders here" if can_drop else "Choose what to play"))
+                         ("Drop videos, folders or links here" if can_drop else "Choose what to play"))
         drop.create_text(w_ // 2, h_ // 2 + u, fill=dim, font=font(0.9),
-                         text="" if lit else "or click to choose videos")
+                         text="" if lit else "or click to choose videos  ·  Ctrl+V pastes a link")
 
     drop.bind("<Configure>", lambda e: draw_zone())
     drop.bind("<Enter>", lambda e: draw_zone("hover") if zone["state"] != "drag" else None)
@@ -494,8 +512,8 @@ def start_window(last_session: list, incoming: queue.Queue, checker: "updates.Ch
 
     if can_drop:
         try:
-            from tkinterdnd2 import DND_FILES
-            root.drop_target_register(DND_FILES)
+            from tkinterdnd2 import DND_FILES, DND_TEXT
+            root.drop_target_register(DND_FILES, DND_TEXT)
             def drag_enter(e):
                 draw_zone("drag")
                 log.info("drop zone highlighted")
@@ -507,7 +525,7 @@ def start_window(last_session: list, incoming: queue.Queue, checker: "updates.Ch
 
             def dropped(e):
                 draw_zone("idle")
-                finish(expand(list(root.tk.splitlist(e.data))))
+                finish(dropped_items(root, e.data))
                 return e.action
 
             root.dnd_bind("<<DropEnter>>", drag_enter)
@@ -517,6 +535,16 @@ def start_window(last_session: list, incoming: queue.Queue, checker: "updates.Ch
             log.info("start window: drag-and-drop unavailable: %s", e)
     root.bind("<Escape>", lambda e: close())
     root.protocol("WM_DELETE_WINDOW", close)
+
+    def paste(e=None):
+        items = pasted_items(root)
+        log.info("start window paste: %d item(s)", len(items))
+        if items:
+            finish(items)
+        else:
+            status.config(text="Nothing to play on the clipboard: copy a video link or file first.")
+    for seq in ("<Control-v>", "<Control-V>"):
+        root.bind(seq, paste)
 
     update_link: list = []
 

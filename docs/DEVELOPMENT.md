@@ -30,6 +30,7 @@ folder on the development PC still has the old name; nothing depends on it.
 | `resources.py` | Graphics memory and free RAM, and whether there is room for one more video |
 | `templates.py` | Template format (built-ins and `templates.toml`), shape matching, choosing files, Best fit |
 | `probe.py`, `probe.lua` | Video shapes before opening: one hidden mpv per batch runs the Lua script; cached in `shapes.json` |
+| `ytdlp.py` | Web links: finding yt-dlp, mpv's options for a link, links in pasted/dropped text, weekly self-update |
 | `layout.py` | Pure tiling maths: `arrange`, `layout`, `grid`, `panscan_for`, `Rect` |
 | `ipc.py` | mpv JSON-IPC client over a Windows named pipe: pushed property values, non-blocking sends |
 | `config.py` | Setting defaults (`SETTINGS` table), the user's TOML file, locating mpv |
@@ -316,6 +317,19 @@ folder on the development PC still has the old name; nothing depends on it.
     template…" opens it modally after a folder dialog. With a wall already open, the new process claims
     the control pipe with `[]` (detect only), chooses, then hands the chosen files over (rows not applied).
 
+- Web links (`ytdlp.py`): mpv plays direct stream URLs itself; page links go through mpv's built-in
+  ytdl_hook. For an item containing `://`, `Wall.spawn` adds `--ytdl=yes`, a format capped at
+  `stream_max_height` (`bestvideo[height<=?H]+bestaudio`: mpv joins the two, no ffmpeg needed) and
+  `--script-opts-append=ytdl_hook-ytdl_path=…` pointing at `yt-dlp\yt-dlp.exe` beside the app (pinned
+  version and SHA-256 in `build.ps1`, Unlicense, listed in THIRD-PARTY-NOTICES), or `ytdlp_path`, or
+  PATH. The seek-bar label shows mpv's `media-title` for links. Links come in by command line, Send To,
+  Ctrl+V (`ui.pasted_items`) and browser drops (`DND_TEXT`, `ui.dropped_items`), all through
+  `ytdlp.links_from_text`. `update_in_background` runs `yt-dlp -U` at most weekly in a thread (state in
+  `ytdlp.json`), only for the bundled copy, never with `update_check = false` or in `--exit-after` runs.
+  Verified (hidden mpv): Mux and Apple HLS test streams; YouTube at 1080p without a JavaScript runtime
+  (yt-dlp warns that this is deprecated; Deno would then be needed, ~100 MB). Twitch reached the
+  extractor but the test channel was offline: live Twitch is unverified.
+
 ## GPU driver timeouts
 
 On the development PC (AMD GPU, Windows HDR on) the AMD "driver timeout" popup appeared several times
@@ -385,12 +399,14 @@ python test_layout.py
 python test_config.py
 python test_updates.py
 python test_templates.py
+python test_ytdlp.py
 python tests/smoke.py           # every test below takes over the screen, mouse and often keyboard
 python tests/freeze_test.py     # a suspended player must not stall the wall
 python tests/phase2_test.py     # speed, frame step, A-B loop, tracks, snapshot, crash restart
 python tests/phase3_test.py     # memory guard, Tab focus, sync, Ctrl+S save, saved-wall button
 python tests/phase4_test.py     # templates: CLI, Best fit, chooser, N within shape, short folder, when finished
 python tests/controls_test.py   # 1-9, + / -, Ctrl+B blackout (screen pixels), Ctrl+G offsets
+python tests/streams_test.py    # NEEDS INTERNET: HLS + YouTube links, Ctrl+V paste (uses the clipboard)
 python tests/add_test.py
 python tests/drop_test.py       # needs tkinterdnd2
 python tests/features_test.py   # writes a 26 MB clip to %TEMP% on first run; other tests reuse it

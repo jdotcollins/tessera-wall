@@ -51,6 +51,17 @@ puts a shortcut on the Desktop. `install.ps1 -Uninstall` removes them. Re-run it
 - **Send to > Tessera Wall (random 6)** opens six random videos from the selection.
 - Command line: `pythonw tesserawall.pyw [--random N] [--resume] [--template NAME] FILE_OR_FOLDER...`
 
+### Web videos
+
+Links work as well as files: YouTube, Twitch and the other sites [yt-dlp](https://github.com/yt-dlp/yt-dlp)
+supports, and direct stream addresses (`.m3u8`, `.mp4` links, RTMP). Copy a link and press **Ctrl+V** in
+the start window or the wall, drag a link from your browser onto either, or give links on the command
+line. Each link plays at up to 1080p (`stream_max_height` in the settings file). Templates, **N** and
+*Move on* work with files in folders only, so they leave links alone.
+
+Live streams work while the channel is live. Sites change often and sometimes break playback for a while;
+the copy of yt-dlp inside Tessera Wall updates itself once a week to keep up (see *Updates*).
+
 ### Templates
 
 A template opens videos of matching shapes from a folder, picked at random, in fixed rows: for example
@@ -138,6 +149,7 @@ of the whole PC slowing to a crawl.
 | `C` | Crop: limited, fill, fit |
 | `S` | Settings |
 | `Ctrl+S` | Save this wall under a name, to open it again from the start window |
+| `Ctrl+V` | Open the links (YouTube, Twitch, stream addresses) or files on the clipboard |
 | `Ctrl+B` | Black out: hide, pause and mute everything; `Ctrl+B` or `Esc` brings it all back |
 | `F5` | Reload the settings file |
 | `U` | Open the download page, when a newer version is available |
@@ -163,6 +175,10 @@ Tessera Wall does not update itself. Once a week it asks GitHub for the number o
 if it is newer than yours, the start window and the wall tell you and offer the download page. That
 request contains nothing about you, your videos or your settings; GitHub sees it like any website visit.
 To switch it off, set `update_check = false` in the settings file.
+
+The copy of yt-dlp that plays web links updates itself the same way: at most once a week it asks
+yt-dlp's GitHub releases for a newer version and replaces itself if there is one. `update_check = false`
+stops that too. A yt-dlp you installed yourself (`ytdlp_path`) is never touched.
 
 Each Tessera Wall release includes a tested copy of mpv. New mpv versions reach you through new Tessera Wall
 releases, not separately.

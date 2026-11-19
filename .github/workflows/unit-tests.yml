@@ -30,3 +30,5 @@ jobs:
         run: python test_updates.py
       - name: Templates
         run: python test_templates.py
+      - name: Web links
+        run: python test_ytdlp.py

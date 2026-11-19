@@ -30,6 +30,7 @@ import config as C
 import probe
 import templates as T
 import updates
+import ytdlp
 from files import SESSION_PATH, expand, explorer_sorted, load_session  # expand: tests load this file by path and call it
 from instance import claim_control_pipe, gather_batch, listen
 from ui import enable_drop, make_root, start_window, template_window
@@ -128,6 +129,8 @@ def main():
     log.info("mpv: %s", C.find_mpv())
     log.info("version: %s", updates.current_version())
     checker = updates.Checker(os.path.join(os.path.dirname(os.path.abspath(config_path)), "update.json"))
+    if not ns.exit_after > 0:   # the bundled yt-dlp updates itself weekly (web links); never in test runs
+        ytdlp.update_in_background(os.path.join(os.path.dirname(os.path.abspath(config_path)), "ytdlp.json"))
 
     session_path = ns.session or SESSION_PATH
     plan = None

@@ -28,6 +28,11 @@ $MpvAsset   = 'mpv-x86_64-20261111-git-bcde6b93cc.7z'
 $MpvSha256  = 'f259b5fd4b5c395617c948a4fadcdf55bba1c5282fb7c13e88626b3f71072baf'
 $MpvCommit  = 'bcde6b93cc'
 
+# yt-dlp, which mpv uses to play web links (YouTube, Twitch...). Public domain (Unlicense). Pinned like
+# mpv; installed copies then update themselves weekly (ytdlp.py), because sites change faster than releases.
+$YtdlpVersion = '2026.10.26'
+$YtdlpSha256  = 'f5389d3698ecde4ef06f4e6b1ce0294fe9ac1396228c8990b8d3416d6d177a7d'
+
 $version = (Get-Content VERSION -Raw).Trim()
 "Building Tessera Wall $version"
 
@@ -77,6 +82,23 @@ foreach ($item in 'mpv.exe', 'd3dcompiler_43.dll', 'mpv', 'doc') {
 $mpvVersion = (& $mpvExe --version | Select-Object -First 1)
 "Bundled: $mpvVersion$(if (-not $pinned) { '  (UNPINNED local build: not for release)' })"
 
+# 2b. bundled yt-dlp (checked against the pinned SHA-256)
+$ytdlpCache = Join-Path $PSScriptRoot "downloads\yt-dlp-$YtdlpVersion.exe"
+if (-not (Test-Path $ytdlpCache)) {
+    New-Item -ItemType Directory -Force (Split-Path $ytdlpCache) | Out-Null
+    $url = "https://github.com/yt-dlp/yt-dlp/releases/download/$YtdlpVersion/yt-dlp.exe"
+    "Downloading $url"
+    Invoke-WebRequest $url -OutFile "$ytdlpCache.part" -UseBasicParsing
+    Move-Item "$ytdlpCache.part" $ytdlpCache -Force
+}
+$hash = (Get-FileHash $ytdlpCache -Algorithm SHA256).Hash.ToLower()
+if ($hash -ne $YtdlpSha256) {
+    throw "$ytdlpCache has SHA-256 $hash, expected $YtdlpSha256. Delete it to download again; if it fails again, do not ship it."
+}
+New-Item -ItemType Directory -Force (Join-Path $app 'yt-dlp') | Out-Null
+Copy-Item $ytdlpCache (Join-Path $app 'yt-dlp\yt-dlp.exe') -Force
+"Bundled: yt-dlp $YtdlpVersion"
+
 if ($pinned) {
     $origin = @"
   Build:          $MpvAsset
@@ -104,6 +126,11 @@ not apply to it. mpv comes with no warranty.
 
   Project:        https://mpv.io   https://github.com/mpv-player/mpv
   Licence text:   https://github.com/mpv-player/mpv/blob/master/LICENSE.GPL
+
+Tessera Wall also includes yt-dlp $YtdlpVersion (yt-dlp\yt-dlp.exe, SHA-256 $YtdlpSha256), which mpv
+uses to play links to web pages such as YouTube. It is released into the public domain (the Unlicense) and
+updates itself once a week unless update checks are switched off.
+  Project:        https://github.com/yt-dlp/yt-dlp
 
 Tessera Wall also includes Python (PSF licence), Tcl/Tk (BSD-style licence), tkinterdnd2 (MIT) and tkdnd (BSD).
 "@ | Set-Content (Join-Path $app 'THIRD-PARTY-NOTICES.txt') -Encoding utf8

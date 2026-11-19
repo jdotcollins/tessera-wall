@@ -29,7 +29,8 @@ from files import expand, save_wall
 import probe
 import resources
 import templates
-from ui import fade, hover, round_corners, settings_window
+import ytdlp
+from ui import fade, hover, pasted_items, round_corners, settings_window
 from winapi import GA_ROOT, pictures_folder, user32
 
 log = logging.getLogger("tesserawall")
@@ -82,6 +83,7 @@ HELP_SECTIONS = [
         (["H", "?", "F1"], "Show or hide this list"),
         (["S"], "Settings"),
         (["Ctrl+S"], "Save this wall, to open it again from the start window"),
+        (["Ctrl+V"], "Open the links (YouTube, Twitch...) or files on the clipboard"),
         (["Ctrl+B"], "Black out: hide, pause and mute everything (again or Esc to return)"),
         (["F5"], "Reload the settings file"),
         (["U"], "Open the download page, when a new version is out"),
@@ -264,6 +266,7 @@ class Wall:
         if log_dir:  # one verbose mpv log per player, for diagnosing renderer/driver problems
             os.makedirs(log_dir, exist_ok=True)
             args.append("--log-file=" + os.path.join(log_dir, f"mpv-{os.getpid()}-{self.counter}.log"))
+        args += ytdlp.mpv_args(path)              # links: which yt-dlp, and the quality to ask for
         args += list(C.EXTRA_MPV_ARGS) + ["--", path]
         try:
             proc = subprocess.Popen(args, creationflags=subprocess.CREATE_NO_WINDOW)
@@ -915,7 +918,8 @@ class Wall:
         text = "%s / %s%s" % (fmt_time(pos or 0), fmt_time(dur or 0), "   [pinned]" if self.pin is t else "")
         if C.SEEKBAR_SHOW_NAME:
             # File name first, shortened to what fits; { } \ would be read as ASS formatting codes.
-            name = t.path if "://" in t.path else os.path.basename(t.path)
+            # A link shows its title (from the site, via yt-dlp) rather than the raw address.
+            name = (t.ipc.value("media-title") or t.path) if "://" in t.path else os.path.basename(t.path)
             name = name.replace("\\", "/").replace("{", "(").replace("}", ")")
             room = int((w - 20) / (size * 0.5)) - len(text) - 3   # ~0.46 of the font size per Latin letter
             if room >= 8:
@@ -979,7 +983,7 @@ class Wall:
                     # wall needs are pushed by mpv instead of asked for (see ipc.MpvIpc).
                     t.ipc = MpvIpc(t.pipe, timeout=0, handshake=False)
                     t.ipc.observe("idle-active", "dwidth", "dheight", "video-params", "percent-pos",
-                                  "time-pos", "duration", "pause", "eof-reached")
+                                  "time-pos", "duration", "pause", "eof-reached", "media-title")
                     self.need_layout = True  # so panscan gets sent
                     if not self.hint_shown and (self.notice or C.SHOW_HELP_HINT):
                         self.hint_shown = True   # a startup problem with the settings file wins over the hint
@@ -1137,6 +1141,17 @@ class Wall:
             if abs(drift) > 0.25:
                 t.ipc.post("seek", round(want, 3), "absolute")
                 log.info("sync: corrected %.2fs drift", drift)
+
+    def paste(self):
+        """Ctrl+V: open the links (YouTube, Twitch, stream addresses...) or file paths on the clipboard."""
+        items = pasted_items(self.root)
+        target = self.focus or (self.tiles[0] if self.tiles else None)
+        log.info("pasted %d item(s)", len(items))
+        if target and target.ipc:
+            target.ipc.post("show-text", f"Opening {len(items)} pasted video{'s' if len(items) != 1 else ''}"
+                            if items else "Nothing to play on the clipboard", 2000)
+        for item in items:
+            self.incoming.put(item)
 
     def focus_number(self, n: int):
         """1-9: focus and pin the n-th video (wall order: rows top to bottom, left to right); the same
@@ -1359,6 +1374,8 @@ class Wall:
             bind_all(seq, lambda e: None if self.dialog_open else self.toggle_sync(keep_offsets=True))
         for seq in ("<Control-b>", "<Control-B>"):
             bind_all(seq, lambda e: None if self.dialog_open else self.toggle_blackout())
+        for seq in ("<Control-v>", "<Control-V>"):
+            bind_all(seq, lambda e: None if self.dialog_open else self.paste())
         for n in range(1, 10):
             b(f"<Key-{n}>", lambda e, n=n: self.focus_number(n))
         for seq in ("<plus>", "<equal>", "<KP_Add>"):

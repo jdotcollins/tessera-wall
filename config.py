@@ -26,6 +26,10 @@ SETTINGS = [
     ("mpv", "USE_USER_MPV_CONFIG", False, "true = let each player load your own mpv.conf and scripts."),
     ("mpv", "EXTRA_MPV_ARGS", [], 'Extra mpv options for every player, e.g. ["--volume=70", "--hwdec=no"].'),
     ("mpv", "MAX_VIDEOS", 24, "Most videos a wall will open; extra files are ignored."),
+    ("mpv", "YTDLP_PATH", "",
+     "Full path to yt-dlp.exe, for links to web pages (YouTube...). Empty = the copy shipped with Tessera\n"
+     "Wall (which updates itself weekly), else one on PATH."),
+    ("mpv", "STREAM_MAX_HEIGHT", 1080, "Highest picture height asked for from web links; lower saves bandwidth."),
     ("mpv", "VIDEO_EXTS", {".mp4", ".mkv", ".webm", ".mov", ".avi", ".m4v", ".wmv", ".flv", ".ts", ".m2ts",
                            ".mpg", ".mpeg", ".gif", ".y4m"},
      "File types picked up when you open a folder."),
