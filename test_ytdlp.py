@@ -37,33 +37,128 @@ def test_mpv_args():
         assert f"--script-opts-append=ytdl_hook-ytdl_path={exe}" in Y.mpv_args("https://twitch.tv/x")
         C.YTDLP_PATH = exe + ".missing"
         assert Y.find() is None and not any("ytdl_path" in a for a in Y.mpv_args("https://a.b/c"))
+        C.YTDLP_PATH = ""
         C.STREAM_MAX_HEIGHT = 10
         assert any("height<=?144" in a for a in Y.mpv_args("https://a.b/c")), "a silly cap is raised to 144"
     finally:
         C.YTDLP_PATH, C.STREAM_MAX_HEIGHT = saved
 
 
-def test_self_update_only_when_allowed():
-    saved = C.UPDATE_CHECK, C.YTDLP_PATH, Y.bundled_path
-    state = os.path.join(tempfile.mkdtemp(prefix="tesserawall-ytdlp-state-"), "ytdlp.json")
-    try:
-        exe = os.path.join(tempfile.mkdtemp(prefix="tesserawall-bundled-"), "yt-dlp.exe")
-        open(exe, "w").close()
-        Y.bundled_path = lambda: exe
-        C.UPDATE_CHECK, C.YTDLP_PATH = False, ""
-        assert Y.update_in_background(state) is None, "update checks off"
-        C.UPDATE_CHECK, C.YTDLP_PATH = True, exe
-        assert Y.update_in_background(state) is None, "never update a yt-dlp the user chose"
+class FakeYtdlp:
+    """A temporary app folder with a shipped yt-dlp, a temporary state folder, and Y.run replaced: each
+    exe "reports" the version in self.versions; --update-to moves the own copy to self.latest."""
+
+    def __init__(self, shipped="2026.10.26", latest="2026.10.26"):
+        self.app = tempfile.mkdtemp(prefix="tesserawall-app-")
+        self.state = tempfile.mkdtemp(prefix="tesserawall-state-")
+        os.makedirs(os.path.join(self.app, "yt-dlp"))
+        self.shipped = os.path.join(self.app, "yt-dlp", "yt-dlp.exe")
+        with open(self.shipped, "w") as f:
+            f.write("shipped")
+        with open(os.path.join(self.app, "yt-dlp", "version.txt"), "w") as f:
+            f.write(shipped)
+        self.versions = {self.shipped: shipped}
+        self.latest, self.broken_update, self.calls = latest, False, []
+
+    def run(self, args, timeout):
+        exe = args[0]
+        self.calls.append(args[1:])
+        if args[1] == "--version":
+            v = self.versions.get(exe) or (self.versions.get(self.shipped) if open(args[0]).read() == "shipped" else None)
+            return (0, v + "\n") if v and v != "broken" else (1, "error")
+        if args[1] == "--update-to":
+            self.versions[exe] = "broken" if self.broken_update else self.latest
+            return 0, f"Updated yt-dlp to stable@{self.latest}\n"
+        return 1, "?"
+
+    def __enter__(self):
+        self.saved = C.app_dir, C.UPDATE_CHECK, C.YTDLP_PATH, Y.run, Y._state_dir
+        C.app_dir, C.UPDATE_CHECK, C.YTDLP_PATH, Y.run = (lambda: self.app), True, "", self.run
+        Y.init(self.state)
+        return self
+
+    def __exit__(self, *exc):
+        C.app_dir, C.UPDATE_CHECK, C.YTDLP_PATH, Y.run, Y._state_dir = self.saved
+
+
+def test_versions():
+    assert Y.parse_version("2026.10.26") == (2026, 10, 26)
+    assert Y.parse_version("2026.11.03.233012") > Y.parse_version("2026.11.03")
+    assert Y.parse_version("garbage") is None and Y.parse_version(None) is None
+
+
+def test_updates_only_when_allowed():
+    with FakeYtdlp() as f:
+        C.UPDATE_CHECK = False
+        assert Y.update_in_background() is None and not Y.recover(), "update checks off"
+        C.UPDATE_CHECK, C.YTDLP_PATH = True, f.shipped
+        assert Y.update_in_background() is None and not Y.recover(), "never update a yt-dlp the user chose"
         C.YTDLP_PATH = ""
-        with open(state, "w") as f:
-            json.dump({"checked": time.time() - 3600}, f)
-        assert Y.update_in_background(state) is None, "checked an hour ago"
-        Y.bundled_path = lambda: exe + ".missing"
-        os.remove(state)
-        assert Y.update_in_background(state) is None, "no bundled copy (running from source)"
-    finally:
-        C.UPDATE_CHECK, C.YTDLP_PATH = saved[0], saved[1]
-        Y.bundled_path = saved[2]
+        Y.write_state(checked=time.time() - 3600)
+        assert Y.update_in_background() is None, "checked an hour ago"
+        os.remove(f.shipped)
+        Y.write_state(checked=0)
+        assert Y.update_in_background() is None, "no shipped copy (running from source)"
+        assert f.calls == []
+
+
+def test_refresh_uses_the_newer_copy_and_never_touches_the_shipped_one():
+    with FakeYtdlp(shipped="2026.10.26", latest="2026.11.12") as f:
+        assert Y.find() == f.shipped, "before any update: the shipped copy"
+        assert Y.refresh() is True
+        own = Y.own_path()
+        assert os.path.isfile(own) and Y.read_state()["version"] == "2026.11.12"
+        assert Y.find() == own and Y.candidates() == [own, f.shipped]
+        assert open(f.shipped).read() == "shipped" and f.versions[f.shipped] == "2026.10.26"
+        assert Y.refresh() is False, "nothing new"
+
+
+def test_newer_release_wins_over_an_older_own_copy():
+    """Installing a Tessera Wall release whose shipped yt-dlp is newer than the own copy: no downgrade."""
+    with FakeYtdlp(shipped="2026.10.26", latest="2026.11.01") as f:
+        Y.refresh()
+        with open(os.path.join(f.app, "yt-dlp", "version.txt"), "w") as v:
+            v.write("2026.12.01")
+        f.versions[f.shipped] = "2026.12.01"
+        assert Y.find() == f.shipped
+        f.latest = "2026.12.01"
+        Y.refresh()                                   # starts the own copy again from the newer shipped one
+        assert Y.read_state()["version"] == "2026.12.01" and Y.find() == f.shipped, "a tie keeps the shipped copy"
+
+
+def test_nothing_new_is_no_change():
+    """First check with nothing newer: the own copy is set up, but links still use the same yt-dlp."""
+    with FakeYtdlp(shipped="2026.10.26", latest="2026.10.26") as f:
+        assert Y.refresh() is False and Y.find() == f.shipped and os.path.isfile(Y.own_path())
+
+
+def test_a_broken_update_is_removed():
+    with FakeYtdlp(latest="2026.11.12") as f:
+        f.broken_update = True
+        Y.refresh()
+        assert not os.path.exists(Y.own_path()) and Y.read_state()["version"] is None
+        assert Y.candidates() == [f.shipped]
+
+
+def test_recover_is_rate_limited():
+    with FakeYtdlp(latest="2026.11.12"):
+        assert Y.recover() is True
+        assert Y.recover() is False, "tried a moment ago"
+        Y.write_state(recovered=time.time() - Y.RECOVER_INTERVAL - 1)
+        assert Y.recover() is False, "allowed again, but nothing newer"
+
+
+def test_link_env_and_deno():
+    with FakeYtdlp() as f:
+        assert Y.mpv_env(r"C:\a.mp4") is None
+        env = Y.mpv_env("https://a.b/c")
+        assert env["DENO_DIR"] == os.path.join(f.state, "deno") and env["DENO_NO_UPDATE_CHECK"] == "1"
+        assert not any("js-runtimes" in a for a in Y.mpv_args("https://a.b/c")), "no Deno shipped"
+        open(os.path.join(f.app, "yt-dlp", "deno.exe"), "w").close()
+        assert f"--ytdl-raw-options-append=js-runtimes=deno:{Y.deno_path()}" in Y.mpv_args("https://a.b/c")
+        assert any(f.shipped in a for a in Y.mpv_args("https://a.b/c"))
+        other = os.path.join(f.state, "x.exe")
+        assert f"--script-opts-append=ytdl_hook-ytdl_path={other}" in Y.mpv_args("https://a.b/c", other)
 
 
 def test_clipboard_items():

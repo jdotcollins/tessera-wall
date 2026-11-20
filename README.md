@@ -56,11 +56,14 @@ puts a shortcut on the Desktop. `install.ps1 -Uninstall` removes them. Re-run it
 Links work as well as files: YouTube, Twitch and the other sites [yt-dlp](https://github.com/yt-dlp/yt-dlp)
 supports, and direct stream addresses (`.m3u8`, `.mp4` links, RTMP). Copy a link and press **Ctrl+V** in
 the start window or the wall, drag a link from your browser onto either, or give links on the command
-line. Each link plays at up to 1080p (`stream_max_height` in the settings file). Templates, **N** and
+line. Each link plays at up to 1080p (`stream_max_height` in the settings file), except Twitch, which
+plays at the stream's own quality. Templates, **N** and
 *Move on* work with files in folders only, so they leave links alone.
 
-Live streams work while the channel is live. Sites change often and sometimes break playback for a while;
-the copy of yt-dlp inside Tessera Wall updates itself once a week to keep up (see *Updates*).
+Live streams work while the channel is live. Sites change often and sometimes break playback for a while,
+so Tessera Wall keeps yt-dlp up to date (see *Updates*). If a link will not open, it checks for a newer
+yt-dlp straight away and tries the link again before giving up. YouTube also needs
+[Deno](https://deno.com), which is included.
 
 ### Templates
 
@@ -176,12 +179,16 @@ if it is newer than yours, the start window and the wall tell you and offer the 
 request contains nothing about you, your videos or your settings; GitHub sees it like any website visit.
 To switch it off, set `update_check = false` in the settings file.
 
-The copy of yt-dlp that plays web links updates itself the same way: at most once a week it asks
-yt-dlp's GitHub releases for a newer version and replaces itself if there is one. `update_check = false`
-stops that too. A yt-dlp you installed yourself (`ytdlp_path`) is never touched.
+yt-dlp, which plays web links, is different: video sites change faster than Tessera Wall releases, so
+Tessera Wall keeps a second copy of it in `%LOCALAPPDATA%\TesseraWall\yt-dlp` up to date. Once a day,
+and straight away when a link will not open (at most every few hours), it asks yt-dlp's GitHub releases
+for a newer stable version and downloads it if there is one. The copy installed with Tessera Wall is
+never changed: if an update ever fails to run, or a link fails with it, Tessera Wall goes back to the
+installed copy. `update_check = false` stops all of this; a yt-dlp you installed yourself
+(`ytdlp_path`) is never touched.
 
-Each Tessera Wall release includes a tested copy of mpv. New mpv versions reach you through new Tessera Wall
-releases, not separately.
+Each Tessera Wall release includes tested copies of mpv and Deno. New versions of those reach you through
+new Tessera Wall releases, not separately.
 
 ## Troubleshooting
 
@@ -207,5 +214,5 @@ how to run the tests.
 
 ## Licence
 
-MIT. See [LICENSE](LICENSE). mpv is a separate program under its own licence and is not distributed
-with Tessera Wall.
+MIT. See [LICENSE](LICENSE). The installer also includes mpv (GPL), yt-dlp (Unlicense) and Deno (MIT),
+separate programs under their own licences; see `THIRD-PARTY-NOTICES.txt` in the installation.

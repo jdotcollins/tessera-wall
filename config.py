@@ -28,8 +28,9 @@ SETTINGS = [
     ("mpv", "MAX_VIDEOS", 24, "Most videos a wall will open; extra files are ignored."),
     ("mpv", "YTDLP_PATH", "",
      "Full path to yt-dlp.exe, for links to web pages (YouTube...). Empty = the copy shipped with Tessera\n"
-     "Wall (which updates itself weekly), else one on PATH."),
-    ("mpv", "STREAM_MAX_HEIGHT", 1080, "Highest picture height asked for from web links; lower saves bandwidth."),
+     "Wall, kept up to date daily (see update_check), else one on PATH. A yt-dlp you set here is never updated."),
+    ("mpv", "STREAM_MAX_HEIGHT", 1080,
+     "Highest picture height asked for from web links; lower saves bandwidth. Twitch ignores it."),
     ("mpv", "VIDEO_EXTS", {".mp4", ".mkv", ".webm", ".mov", ".avi", ".m4v", ".wmv", ".flv", ".ts", ".m2ts",
                            ".mpg", ".mpeg", ".gif", ".y4m"},
      "File types picked up when you open a folder."),

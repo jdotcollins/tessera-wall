@@ -30,7 +30,7 @@ folder on the development PC still has the old name; nothing depends on it.
 | `resources.py` | Graphics memory and free RAM, and whether there is room for one more video |
 | `templates.py` | Template format (built-ins and `templates.toml`), shape matching, choosing files, Best fit |
 | `probe.py`, `probe.lua` | Video shapes before opening: one hidden mpv per batch runs the Lua script; cached in `shapes.json` |
-| `ytdlp.py` | Web links: finding yt-dlp, mpv's options for a link, links in pasted/dropped text, weekly self-update |
+| `ytdlp.py` | Web links: which yt-dlp (shipped or updated copy), mpv's options and Deno for a link, links in pasted/dropped text, updates |
 | `layout.py` | Pure tiling maths: `arrange`, `layout`, `grid`, `panscan_for`, `Rect` |
 | `ipc.py` | mpv JSON-IPC client over a Windows named pipe: pushed property values, non-blocking sends |
 | `config.py` | Setting defaults (`SETTINGS` table), the user's TOML file, locating mpv |
@@ -169,7 +169,9 @@ folder on the development PC still has the old name; nothing depends on it.
   `jdotcollins/tessera-wall` by default; while that repository is private or has no releases the
   request fails quietly and nothing is shown. `tests/update_test.py` runs it against a local fake server
   (`TESSERAWALL_UPDATE_API`) with browser opening replaced by a log line (`TESSERAWALL_NO_BROWSER=1`).
-- Release checklist: run `update-mpv.ps1 -CheckOnly`; run the full test suite; build the installer;
+- Release checklist: run `update-mpv.ps1 -CheckOnly`; check for newer stable yt-dlp and Deno releases
+  and, if worth it, re-pin them in `build.ps1` (version and SHA-256; Deno's `licenses\deno-LICENSE.md`
+  from the same tag); run the full test suite; build the installer;
   commit and tag `v<VERSION>`; publish the GitHub release with the installer **and** the mpv archive
   from `downloads\` attached (the build project deletes old releases, and the archive is the shipped
   build's source pointer for the GPL notice).
@@ -319,20 +321,44 @@ folder on the development PC still has the old name; nothing depends on it.
 
 - Web links (`ytdlp.py`): mpv plays direct stream URLs itself; page links go through mpv's built-in
   ytdl_hook. For an item containing `://`, `Wall.spawn` adds `--ytdl=yes`, a format capped at
-  `stream_max_height` (`bestvideo[height<=?H]+bestaudio`: mpv joins the two, no ffmpeg needed) and
-  `--script-opts-append=ytdl_hook-ytdl_path=…` pointing at `yt-dlp\yt-dlp.exe` beside the app (pinned
-  version and SHA-256 in `build.ps1`, Unlicense, listed in THIRD-PARTY-NOTICES), or `ytdlp_path`, or
-  PATH. The seek-bar label shows mpv's `media-title` for links. Links come in by command line, Send To,
+  `stream_max_height` (`bestvideo[height<=?H]+bestaudio`: mpv joins the two, no ffmpeg needed),
+  `--script-opts-append=ytdl_hook-ytdl_path=…` (the yt-dlp chosen below) and
+  `--ytdl-raw-options-append=js-runtimes=deno:…` for the shipped `yt-dlp\deno.exe`. YouTube needs a
+  JavaScript runtime for its challenges (without one yt-dlp warns that this is deprecated and some formats
+  go missing); Deno is the one yt-dlp recommends and enables by default. A link's player gets
+  `DENO_DIR` (the state folder's `deno\`, not `%LOCALAPPDATA%\deno`) and `DENO_NO_UPDATE_CHECK=1`
+  (`ytdlp.mpv_env`). The seek-bar label shows mpv's `media-title` for links.
+- yt-dlp copies (`ytdlp.py`). The shipped `yt-dlp\yt-dlp.exe` (version in `version.txt`) and Deno are
+  pinned with SHA-256 in `build.ps1`, like mpv, and never modified. Tessera Wall's own copy lives in the
+  state folder (`%LOCALAPPDATA%\TesseraWall`; beside the settings file when `--config` names another one,
+  as tests do) with `ytdlp.json` (`version`, `checked`, `recovered`). `candidates()` = the newer of the two
+  (a tie keeps the shipped copy, so a release with a newer yt-dlp never gets downgraded), then the other;
+  `ytdlp_path` alone if set; else PATH. `refresh()` (worker thread, one at a time) starts the own copy
+  from the shipped one when missing or older, runs `yt-dlp --update-to stable` on it (yt-dlp's updater
+  checks the SHA-256 from the release's SHA2-256SUMS, no signature, and swaps the exe via `.old`/`.new`
+  even while another copy runs), then `--version`; a copy that does not run is deleted. It runs at most
+  daily (`update_in_background`, not in `--exit-after` runs) and, via `recover()`, when a link fails to
+  open (at most every 3 h). `Wall.open_failed`: a link that fails is retried once after that check (with
+  the new copy if it changed) and then with any copy it has not been tried with (`link_tried`), before it
+  is reported; the wall stays open while a retry is pending (`retrying`). Only the own copy is ever
+  updated, never with `update_check = false` or `ytdlp_path`. The uninstaller removes the own copy,
+  `deno\` and `ytdlp.json`.
+- Links come in by command line, Send To,
   Ctrl+V (`ui.paste_async`) and browser drops (`DND_TEXT`, `ui.dropped_items`), all through
   `ytdlp.links_from_text`. Ctrl+V never calls Tk's `clipboard_get` on the Tk thread: an app that renders
   its clipboard data on request makes that call wait until it answers (~30 s if it is busy or hung), so
   a worker thread reads the clipboard through Win32 (`winapi.read_clipboard`: CF_HDROP for files copied
   in Explorer, else CF_UNICODETEXT) and lists any folders; the Tk thread polls for the result and gives
-  up after 5 s with "not answering". `update_in_background` runs `yt-dlp -U` at most weekly in a thread (state in
-  `ytdlp.json`), only for the bundled copy, never with `update_check = false` or in `--exit-after` runs.
-  Verified (hidden mpv): Mux and Apple HLS test streams; YouTube at 1080p without a JavaScript runtime
-  (yt-dlp warns that this is deprecated; Deno would then be needed, ~100 MB). Twitch reached the
-  extractor but the test channel was offline: live Twitch is unverified.
+  up after 5 s with "not answering".
+  Verified: Mux and Apple HLS test streams; YouTube at 1080p60 with Deno (extraction ~0.6-1.3 s slower
+  than without, warning gone); live Twitch (LofiGirl, on air around the clock: a dependable test channel);
+  a real update from 2026.10.21 to 2026.10.26 in 3.8 s with the shipped copy untouched.
+  Known limit: `stream_max_height` does not hold for Twitch. Twitch offers each quality as one muxed HLS
+  stream; mpv's ytdl_hook (default `all_formats`) puts all of them in an EDL, and the track mpv selects is
+  labelled with yt-dlp's choice (e.g. "720p") but decodes the first EDL entry, the 1080p source; only that
+  one video track is exposed, so switching `vid` cannot help. `ytdl_hook-all_formats=no` instead wraps the
+  single live stream in an EDL that mpv cannot play ("no audio or video data played"). Fixing it would
+  mean resolving the variant URL with yt-dlp ourselves and handing mpv the m3u8; not done, for stability.
 
 ## GPU driver timeouts
 
@@ -410,7 +436,8 @@ python tests/phase2_test.py     # speed, frame step, A-B loop, tracks, snapshot,
 python tests/phase3_test.py     # memory guard, Tab focus, sync, Ctrl+S save, saved-wall button
 python tests/phase4_test.py     # templates: CLI, Best fit, chooser, N within shape, short folder, when finished
 python tests/controls_test.py   # 1-9, + / -, Ctrl+B blackout (screen pixels), Ctrl+G offsets
-python tests/streams_test.py    # NEEDS INTERNET: HLS + YouTube links, Ctrl+V paste (uses the clipboard)
+python tests/streams_test.py    # NEEDS INTERNET + build.ps1 first (packaged app): HLS, YouTube, live Twitch,
+                                # Ctrl+V paste (uses the clipboard), recovery from a broken updated yt-dlp
 python tests/add_test.py
 python tests/drop_test.py       # needs tkinterdnd2
 python tests/features_test.py   # writes a 26 MB clip to %TEMP% on first run; other tests reuse it

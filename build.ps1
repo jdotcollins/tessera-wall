@@ -29,9 +29,15 @@ $MpvSha256  = 'f259b5fd4b5c395617c948a4fadcdf55bba1c5282fb7c13e88626b3f71072baf'
 $MpvCommit  = 'bcde6b93cc'
 
 # yt-dlp, which mpv uses to play web links (YouTube, Twitch...). Public domain (Unlicense). Pinned like
-# mpv; installed copies then update themselves weekly (ytdlp.py), because sites change faster than releases.
+# mpv and never modified; the app keeps a separate copy updated from yt-dlp's stable channel (ytdlp.py),
+# because sites change faster than releases.
 $YtdlpVersion = '2026.10.26'
 $YtdlpSha256  = 'f5389d3698ecde4ef06f4e6b1ce0294fe9ac1396228c8990b8d3416d6d177a7d'
+
+# Deno, the JavaScript runtime yt-dlp needs for YouTube (MIT). Pinned per release like mpv; yt-dlp needs
+# 2.3.0 or newer. SHA-256 of the official deno-x86_64-pc-windows-msvc.zip (GitHub's published digest).
+$DenoVersion = '2.9.8'
+$DenoSha256  = 'cba84b26e0df5ae7f74fc66b86a95b866872a86292ebd84fa1e959927edd93bf'
 
 $version = (Get-Content VERSION -Raw).Trim()
 "Building Tessera Wall $version"
@@ -97,7 +103,28 @@ if ($hash -ne $YtdlpSha256) {
 }
 New-Item -ItemType Directory -Force (Join-Path $app 'yt-dlp') | Out-Null
 Copy-Item $ytdlpCache (Join-Path $app 'yt-dlp\yt-dlp.exe') -Force
+Set-Content (Join-Path $app 'yt-dlp\version.txt') $YtdlpVersion -NoNewline   # read by ytdlp.bundled_version
 "Bundled: yt-dlp $YtdlpVersion"
+
+# 2c. bundled Deno, beside yt-dlp (checked against the pinned SHA-256)
+$denoCache = Join-Path $PSScriptRoot "downloads\deno-$DenoVersion-x86_64-pc-windows-msvc.zip"
+if (-not (Test-Path $denoCache)) {
+    $url = "https://github.com/denoland/deno/releases/download/v$DenoVersion/deno-x86_64-pc-windows-msvc.zip"
+    "Downloading $url"
+    Invoke-WebRequest $url -OutFile "$denoCache.part" -UseBasicParsing
+    Move-Item "$denoCache.part" $denoCache -Force
+}
+$hash = (Get-FileHash $denoCache -Algorithm SHA256).Hash.ToLower()
+if ($hash -ne $DenoSha256) {
+    throw "$denoCache has SHA-256 $hash, expected $DenoSha256. Delete it to download again; if it fails again, do not ship it."
+}
+$denoTmp = Join-Path $PSScriptRoot 'build\deno'
+if (Test-Path $denoTmp) { Remove-Item $denoTmp -Recurse -Force }
+Expand-Archive $denoCache $denoTmp
+Copy-Item (Join-Path $denoTmp 'deno.exe') (Join-Path $app 'yt-dlp\deno.exe') -Force
+$denoReported = (& (Join-Path $app 'yt-dlp\deno.exe') --version | Select-Object -First 1)
+if ($denoReported -notmatch "^deno $([regex]::Escape($DenoVersion)) ") { throw "deno.exe reports '$denoReported'" }
+"Bundled: $denoReported"
 
 if ($pinned) {
     $origin = @"
@@ -128,12 +155,19 @@ not apply to it. mpv comes with no warranty.
   Licence text:   https://github.com/mpv-player/mpv/blob/master/LICENSE.GPL
 
 Tessera Wall also includes yt-dlp $YtdlpVersion (yt-dlp\yt-dlp.exe, SHA-256 $YtdlpSha256), which mpv
-uses to play links to web pages such as YouTube. It is released into the public domain (the Unlicense) and
-updates itself once a week unless update checks are switched off.
+uses to play links to web pages such as YouTube. It is released into the public domain (the Unlicense).
+This copy is never modified; unless update checks are switched off, Tessera Wall keeps a separate copy in
+%LOCALAPPDATA%\TesseraWall\yt-dlp updated from yt-dlp's stable releases.
   Project:        https://github.com/yt-dlp/yt-dlp
+
+Tessera Wall also includes Deno $DenoVersion (yt-dlp\deno.exe, from deno-x86_64-pc-windows-msvc.zip, SHA-256
+$DenoSha256), the JavaScript runtime yt-dlp uses for YouTube. Its licence follows at the end of this file.
+  Project:        https://deno.com   https://github.com/denoland/deno
 
 Tessera Wall also includes Python (PSF licence), Tcl/Tk (BSD-style licence), tkinterdnd2 (MIT) and tkdnd (BSD).
 "@ | Set-Content (Join-Path $app 'THIRD-PARTY-NOTICES.txt') -Encoding utf8
+@("", "---- Deno $DenoVersion ----", "") + (Get-Content (Join-Path $PSScriptRoot 'licenses\deno-LICENSE.md')) |
+    Add-Content (Join-Path $app 'THIRD-PARTY-NOTICES.txt') -Encoding utf8
 Copy-Item tesserawall.ico, tesserawall.png $app -Force          # window icons, loaded by set_icon() at run time
 Copy-Item probe.lua $app -Force                                 # mpv script used by probe.py (templates)
 Copy-Item LICENSE (Join-Path $app 'LICENSE.txt') -Force

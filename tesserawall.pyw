@@ -129,8 +129,12 @@ def main():
     log.info("mpv: %s", C.find_mpv())
     log.info("version: %s", updates.current_version())
     checker = updates.Checker(os.path.join(os.path.dirname(os.path.abspath(config_path)), "update.json"))
-    if not ns.exit_after > 0:   # the bundled yt-dlp updates itself weekly (web links); never in test runs
-        ytdlp.update_in_background(os.path.join(os.path.dirname(os.path.abspath(config_path)), "ytdlp.json"))
+    # Tessera Wall's updatable yt-dlp and Deno's cache are machine-local (%LOCALAPPDATA%, not the roaming
+    # settings folder); with another settings file (tests) they go beside it.
+    default_config = os.path.abspath(config_path) == os.path.abspath(C.user_config_path())
+    ytdlp.init(ytdlp.state_dir() if default_config else os.path.dirname(os.path.abspath(config_path)))
+    if not ns.exit_after > 0:   # yt-dlp is checked for updates daily (web links); never in test runs
+        ytdlp.update_in_background()
 
     session_path = ns.session or SESSION_PATH
     plan = None

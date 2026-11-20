@@ -34,6 +34,14 @@ Name: "contextmenu"; Description: "Add ""Play together in Tessera Wall"" to the 
 [Files]
 Source: "build\dist\TesseraWall\*"; DestDir: "{app}"; Flags: recursesubdirs ignoreversion
 
+[UninstallDelete]
+; Downloaded by the app, not settings (those are in %APPDATA%\TesseraWall and are kept): the updated yt-dlp
+; and Deno's cache (ytdlp.py).
+Type: filesandordirs; Name: "{localappdata}\TesseraWall\yt-dlp"
+Type: filesandordirs; Name: "{localappdata}\TesseraWall\deno"
+Type: files; Name: "{localappdata}\TesseraWall\ytdlp.json"
+Type: dirifempty; Name: "{localappdata}\TesseraWall"
+
 [Icons]
 Name: "{autoprograms}\Tessera Wall"; Filename: "{app}\TesseraWall.exe"
 Name: "{autodesktop}\Tessera Wall"; Filename: "{app}\TesseraWall.exe"; Tasks: desktopicon

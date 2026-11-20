@@ -8,6 +8,7 @@ import queue
 import random
 import re
 import subprocess
+import threading
 import time
 import tkinter as tk
 from ctypes import wintypes
@@ -189,6 +190,13 @@ class Wall:
         self.top_since: float | None = None   # when the pointer reached the top edge
         self.dialog_open = False
         self.failed: list[str] = []           # files mpv could not open, not yet reported
+        # Links that fail to open are retried (see open_failed): which yt-dlp each was tried with, the one
+        # to use next, links that already had their update check, and retries still being prepared.
+        self.link_tried: dict[str, list[str]] = {}
+        self.link_next: dict[str, str] = {}
+        self.link_checked: set[str] = set()
+        self.link_retries: queue.Queue = queue.Queue()
+        self.retrying = 0
         self.updates: updates.Checker | None = None   # set by main()
         self.update_shown = False
         self.layout_mode = C.LAYOUT_MODE if C.LAYOUT_MODE in LAYOUT_MODES else "grow"
@@ -266,10 +274,15 @@ class Wall:
         if log_dir:  # one verbose mpv log per player, for diagnosing renderer/driver problems
             os.makedirs(log_dir, exist_ok=True)
             args.append("--log-file=" + os.path.join(log_dir, f"mpv-{os.getpid()}-{self.counter}.log"))
-        args += ytdlp.mpv_args(path)              # links: which yt-dlp, and the quality to ask for
+        if "://" in path:                         # links: which yt-dlp (remembered for retries), the quality
+            exe = self.link_next.pop(path, None) or ytdlp.find()
+            if exe:
+                self.link_tried.setdefault(path, []).append(exe)
+            log.info("link uses yt-dlp %s", exe)
+            args += ytdlp.mpv_args(path, exe)
         args += list(C.EXTRA_MPV_ARGS) + ["--", path]
         try:
-            proc = subprocess.Popen(args, creationflags=subprocess.CREATE_NO_WINDOW)
+            proc = subprocess.Popen(args, creationflags=subprocess.CREATE_NO_WINDOW, env=ytdlp.mpv_env(path))
         except OSError as e:
             log.error("could not start mpv for %s: %s", path, e)
             return None
@@ -833,15 +846,64 @@ class Wall:
         self.hide_topbar()
 
     # ---- files that would not play --------------------------------------------
+    def open_failed(self, path: str):
+        """mpv could not open `path`. A file is reported. A link is tried again first, because video sites
+        change and yt-dlp may need updating: once after an update check (ytdlp.recover, in a worker thread),
+        then with any copy of yt-dlp it has not been tried with; only then is it reported."""
+        if "://" not in path:
+            self.failed.append(path)
+            return
+        tried = list(self.link_tried.get(path, []))
+        check = path not in self.link_checked
+        if not check and not any(c not in tried for c in ytdlp.candidates()):
+            self.failed.append(path)
+            return
+        self.link_checked.add(path)
+        self.retrying += 1
+        target = next((t for t in self.tiles if t.ipc and t.path != path), None)
+        if target and check and ytdlp.updates_allowed():
+            target.ipc.post("show-text", "A link didn't open. Checking for a newer yt-dlp…", 4000)
+
+        def work():
+            exe = None
+            try:
+                if check and ytdlp.recover():
+                    exe = ytdlp.find()                   # updated: try the new version first
+                exe = exe or next((c for c in ytdlp.candidates() if c not in tried), None)
+            except Exception as e:                       # never leave the retry count raised
+                log.warning("link retry: %s", e)
+            self.link_retries.put((path, exe))
+        threading.Thread(target=work, daemon=True, name="link retry").start()
+
+    def take_link_retries(self):
+        """On the Tk thread: open again the links open_failed prepared, or report them."""
+        while True:
+            try:
+                path, exe = self.link_retries.get_nowait()
+            except queue.Empty:
+                return
+            self.retrying -= 1
+            if exe:
+                log.info("link: trying again with %s: %s", exe, path)
+                self.link_next[path] = exe
+                self.add(path)
+            else:
+                self.failed.append(path)
+
     def report_failed(self):
         """Tell the user, in plain words, about files mpv could not open."""
-        if not self.failed:
+        if not self.failed or (self.retrying and not self.tiles):
             return
-        names = [os.path.basename(p) or p for p in self.failed]
+        links = all("://" in p for p in self.failed)
+        names = [p if "://" in p else (os.path.basename(p) or p) for p in self.failed]
+        names = [n if len(n) <= 60 else n[:57] + "…" for n in names]
         if len(names) == 1:
-            msg = f"Couldn't play \"{names[0]}\". The file may be damaged or not a video."
+            msg = (f"Couldn't play \"{names[0]}\". " +
+                   ("It may be offline, private or not a video." if links else
+                    "The file may be damaged or not a video."))
         else:
-            msg = f"Couldn't play {len(names)} files: " + ", ".join(names[:3]) + ("…" if len(names) > 3 else "")
+            what = "links" if links else "files"
+            msg = f"Couldn't play {len(names)} {what}: " + ", ".join(names[:3]) + ("…" if len(names) > 3 else "")
         if not self.tiles:                               # nothing at all could be played: say so and leave
             log.info("nothing playable: %s", msg)
             self.failed.clear()
@@ -973,7 +1035,7 @@ class Wall:
             if t.proc.poll() is not None:
                 code = t.proc.returncode
                 if code != 0 and not t.aspect_known:   # never showed a picture
-                    self.failed.append(t.path)
+                    self.open_failed(t.path)
                 elif code != 0 and self.restart(t, code):
                     continue
                 self.remove(t, f"mpv exited with {code}")
@@ -1004,7 +1066,7 @@ class Wall:
                     if t.idle_since is None:
                         t.idle_since = now
                     elif now - t.idle_since > 0.6:
-                        self.failed.append(t.path)
+                        self.open_failed(t.path)
                         self.remove(t, "mpv could not open the file")
                     continue
                 t.idle_since = None
@@ -1032,10 +1094,14 @@ class Wall:
                 self.add(self.incoming.get_nowait())
             except queue.Empty:
                 break
+        self.take_link_retries()
         self.report_failed()
         if self.closing:
             return
         if not self.tiles:
+            if self.retrying:                  # a failed link is about to be tried again: keep the wall
+                self.root.after(C.TICK_MS, self.tick)
+                return
             return self.quit()
         if self.need_layout:
             self.relayout(rearrange=True)
