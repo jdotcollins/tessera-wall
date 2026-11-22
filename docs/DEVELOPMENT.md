@@ -449,6 +449,7 @@ python tests/features2_test.py
 python tests/modes_test.py
 python tests/help_test.py
 python tests/stepfile_test.py
+python tests/carryover_test.py  # a swapped-in video starts at 0 s with no A-B loop after a restored position
 python tests/cursor_test.py
 python tests/reload_test.py
 python tests/restart_test.py [cycles]
