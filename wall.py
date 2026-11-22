@@ -61,6 +61,7 @@ HELP_SECTIONS = [
         (["1", "…", "9"], "Focus video 1-9 (again to release)"),
         (["+", "-"], "One more video from the same folder / one fewer"),
         (["Z"], "Focused video back to normal size (after Ctrl+wheel)"),
+        (["I"], "Clean mode: hide outline, progress line, menus and messages"),
         (["0"], "Unpin, unfocus and mute everything"),
     ]),
     ("Playback", [
@@ -124,6 +125,7 @@ class Tile:
     dim: int | None = None       # brightness last sent to mpv
     placed: tuple | None = None  # last frame.place geometry (after the gutter inset)
     skip: str | None = None      # vd-lavc-skipframe last sent to mpv (economy mode)
+    osd: int | None = None       # osd-level last sent to mpv (0 = no messages: clean mode / show_messages off)
     volume: float = 100.0        # this video's own volume (Up/Down); survives focus changes
     gain: float = 0.0            # crossfade position: 0 = silent and muted, 1 = full volume
     idle_since: float | None = None   # when mpv was first seen idle (file failed to open)
@@ -205,6 +207,8 @@ class Wall:
         self.link_checked: set[str] = set()
         self.link_retries: queue.Queue = queue.Queue()
         self.retrying = 0
+        self.clean = bool(C.CLEAN_MODE)      # I: just the videos (see set_clean)
+        self.last_shown: list = []           # tiles' (dim, osd level) last logged by relayout
         self.panning: Tile | None = None      # magnified video being dragged, with where the drag began
         self.pan_from: tuple | None = None
         self.pan_moved = False
@@ -316,7 +320,7 @@ class Wall:
             return False
         t.proc, t.pipe = started
         t.ipc, t.born, t.restarts, t.opened_at = None, now, t.restarts + [now], pos
-        t.panscan = t.dim = t.skip = None              # resend to the new player
+        t.panscan = t.dim = t.skip = t.osd = None      # resend to the new player
         t.gain = 0.0                                   # starts muted; the crossfade brings sound back
         self.need_layout = True
         log.info("tile restarted (mpv exited with %s) at %.1fs pipe=%s: %s", code, pos, t.pipe, t.path)
@@ -375,7 +379,11 @@ class Wall:
             t.target = r
             ps = round(panscan_for(r.w, r.h, t.aspect, self.max_crop), 3)
             pans.append(ps)
-            dim = -C.DIM_UNFOCUSED if (self.focus and t is not self.focus) else 0
+            dim = -C.DIM_UNFOCUSED if (self.focus and t is not self.focus and not self.clean) else 0
+            osd = 0 if (self.clean or not C.SHOW_MESSAGES) else 1
+            if t.ipc and osd != t.osd:              # 0 hides show-text and mpv's own messages alike
+                t.ipc.set_async("osd-level", osd)
+                t.osd = osd
             if t.ipc and ps != t.panscan:
                 t.ipc.set_async("panscan", ps)
                 t.panscan = ps
@@ -389,6 +397,10 @@ class Wall:
             if t.ipc and skip != t.skip:
                 t.ipc.set_async("vd-lavc-skipframe", skip)
                 t.skip = skip
+        shown = [(t.dim, t.osd) for t in self.tiles]
+        if shown != self.last_shown:                     # dimming and message level, logged when they change
+            self.last_shown = shown
+            log.info("on screen: dim=%s osd=%s", [d for d, _ in shown], [o for _, o in shown])
         self.anim_start = time.monotonic()
         self.bar_next = 0.0  # redraw the seek bar at the new size
         log.info("relayout %s=%s focus=%s%s rects=%s panscan=%s", "cols" if self.columns else "rows", self.rows, f,
@@ -411,7 +423,7 @@ class Wall:
                 t.placed = geom
                 t.frame.place(x=geom[0], y=geom[1], width=geom[2], height=geom[3])
         f = self.focus
-        if f in self.tiles and f.rect and C.FOCUS_OUTLINE and C.TILE_GAP >= 2:
+        if f in self.tiles and f.rect and C.FOCUS_OUTLINE and C.TILE_GAP >= 2 and not self.clean:
             r = f.rect                                    # shows through the gutter around the focused video
             self.ring.place(x=r.x, y=r.y, width=r.w, height=r.h)
             self.ring.lower()
@@ -856,6 +868,11 @@ class Wall:
     def update_topbar(self, pos, now):
         """Resting the pointer on the top edge of the wall shows a slim bar with the things a mouse-only
         user needs: add videos, the controls list, close. It hides when the pointer moves away."""
+        if self.clean or not C.TOP_MENU:
+            if self.topbar is not None and not self.dialog_open:
+                self.hide_topbar()
+            self.top_since = None
+            return
         x, y = pos[0] - self.root.winfo_rootx(), pos[1] - self.root.winfo_rooty()
         over_wall = 0 <= x < self.W
         if self.topbar is None:
@@ -1038,6 +1055,11 @@ class Wall:
             self.cycle_end_mode(C.WHEN_FINISHED)
         if "SWITCH_SECONDS" in names:
             self.cycle_switch(C.SWITCH_SECONDS)
+        if "CLEAN_MODE" in names:
+            self.set_clean(bool(C.CLEAN_MODE), announce=False)
+        if set(names) & {"SHOW_MESSAGES", "FOCUS_OUTLINE", "DIM_UNFOCUSED", "SEEKBAR_HEIGHT", "TOP_MENU"}:
+            self.relayout()                              # message level, dimming and outline now
+            self.bar_next = 0.0
         if "LAYOUT_MODE" in names or "CROP_MODE" in names:   # these are otherwise only starting values
             self.layout_mode = C.LAYOUT_MODE if C.LAYOUT_MODE in LAYOUT_MODES else self.layout_mode
             self.crop_mode = C.CROP_MODE if C.CROP_MODE in CROP_MODES else self.crop_mode
@@ -1057,7 +1079,10 @@ class Wall:
 
     def update_bar(self, now):
         """Draw a progress line + time on the focused tile via mpv's OSD; clear it from the old one."""
-        if C.SEEKBAR_HEIGHT <= 0:
+        if C.SEEKBAR_HEIGHT <= 0 or self.clean:
+            if self.bar_tile and self.bar_tile.ipc:            # just switched off: take the last one down
+                self.bar_tile.ipc.post({"name": "osd-overlay", "id": 1, "format": "none", "data": ""})
+            self.bar_tile = None
             return
         t = self.focus
         if self.bar_tile and self.bar_tile is not t and self.bar_tile.ipc:
@@ -1096,6 +1121,25 @@ class Wall:
         t.ipc.post({"name": "osd-overlay", "id": 1, "format": "ass-events", "data": data,
                        "res_x": w, "res_y": h})
 
+    def hide_after(self) -> float:
+        """Seconds without movement before the pointer hides: 1 in clean mode, else the setting."""
+        return 1.0 if self.clean else C.CURSOR_HIDE_SECONDS
+
+    def set_clean(self, on: bool, announce: bool = True):
+        """I (and the clean_mode setting): just the videos. No outline, dimming, progress line, menu bar
+        or messages, and the pointer hides after a second. Keys and the mouse still work. The one message
+        it shows is its own, at osd level 0, which mpv shows even when other messages are off."""
+        if on == self.clean:
+            return
+        self.clean = on
+        log.info("clean mode %s", "on" if on else "off")
+        self.relayout()                                  # dimming, message level, outline
+        self.bar_next = 0.0
+        t = self.focus if self.focus and self.focus.ipc else next((x for x in self.tiles if x.ipc), None)
+        if announce and t:
+            t.ipc.post("show-text", "Clean mode. Press I to show the controls again" if on else "Controls shown",
+                       2000, 0)
+
     def update_cursor(self, pos, now):
         if pos != self.last_pos:
             self.last_pos, self.last_move = pos, now
@@ -1103,8 +1147,8 @@ class Wall:
                 self.cursor_hidden = False
                 if not self.dragging:
                     self.root.config(cursor="")
-        elif (C.CURSOR_HIDE_SECONDS > 0 and not self.cursor_hidden
-              and now - self.last_move > C.CURSOR_HIDE_SECONDS):
+        elif (self.hide_after() > 0 and not self.cursor_hidden
+              and now - self.last_move > self.hide_after()):
             self.cursor_hidden = True
             self.root.config(cursor="none")  # tk swaps in a blank cursor; mouse input reaches tk, not mpv
 
@@ -1148,6 +1192,8 @@ class Wall:
                                   "time-pos", "duration", "pause", "eof-reached", "media-title")
                     if t.mag:                # a restarted player starts at normal size
                         self.send_magnify(t)
+                    t.osd = 0 if (self.clean or not C.SHOW_MESSAGES) else 1
+                    t.ipc.set_async("osd-level", t.osd)   # before the hint below, which it may silence
                     self.need_layout = True  # so panscan gets sent
                     if not self.hint_shown and (self.notice or C.SHOW_HELP_HINT):
                         self.hint_shown = True   # a startup problem with the settings file wins over the hint
@@ -1543,6 +1589,7 @@ class Wall:
         b("<Shift-MouseWheel>", lambda e: self.seek(1 if e.delta > 0 else -1, everyone=True))
         b("<Control-MouseWheel>", lambda e: self.magnify(e, 1 if e.delta > 0 else -1))
         b("<z>", lambda e: self.unmagnify(self.focus))
+        b("<i>", lambda e: self.set_clean(not self.clean))
         b("<r>", lambda e: self.restart_all())
         b("<Up>", lambda e: self.change_volume(C.VOLUME_STEP))
         b("<Down>", lambda e: self.change_volume(-C.VOLUME_STEP))

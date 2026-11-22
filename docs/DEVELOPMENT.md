@@ -463,6 +463,7 @@ python tests/controls_test.py   # 1-9, + / -, Ctrl+B blackout (screen pixels), C
 powershell -ExecutionPolicy Bypass -File tests\sandbox\run.ps1   # clean PC in Windows Sandbox (~3 min, opens a
                                 # Sandbox window; this PC is not changed): install, a wall with a file, a clip and
                                 # YouTube, first yt-dlp update, update check, uninstall. Report: build\sandbox\out\
+python tests/clean_test.py      # clean mode (I): outline, progress line, dimming, messages, menu bar off and on
 python tests/magnify_test.py    # Ctrl+wheel, drag and Z on a four-colour clip, checked by screen pixels
 python tests/streams_test.py    # NEEDS INTERNET + build.ps1 first (packaged app): HLS, YouTube, live Twitch,
                                 # Ctrl+V paste (uses the clipboard), recovery from a broken updated yt-dlp

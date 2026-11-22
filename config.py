@@ -60,6 +60,11 @@ SETTINGS = [
     ("focus", "SEEKBAR_HEIGHT", 6, "Progress line on the focused video, in pixels. 0 = off."),
     ("focus", "SEEKBAR_SHOW_NAME", True, "Show the file name next to the time."),
     ("focus", "SEEKBAR_COLOUR", "FFA34D", "Progress line colour as BGR hex."),
+    ("focus", "TOP_MENU", True, "Show the menu bar when the pointer rests on the top edge of the screen."),
+    ("focus", "SHOW_MESSAGES", True,
+     "Messages on the videos (volume, mode changes, errors, the update notice). Errors are still logged."),
+    ("focus", "CLEAN_MODE", False,
+     "Open walls in clean mode: no outline, dimming, progress line, menu bar, messages or pointer. I toggles it."),
     ("focus", "SEEKBAR_ZONE", 28, "Clicking or dragging within this many pixels of the bottom edge seeks."),
     ("focus", "UNFOCUSED_SKIP", "",
      'Economy mode: while a video is focused, the others decode fewer frames.\n'

@@ -120,6 +120,11 @@ and turn the wheel over it: it magnifies around the spot you point at, and dragg
 The rest of the wall stays as it is. **Z** or Ctrl+wheel back brings it to normal size; a new file in
 that spot starts at normal size.
 
+For a wall that is just videos (signage, a background wall, recording or streaming the screen), press
+**I** for clean mode: no outline, dimming, progress line, menu bar, messages or pointer. Every key and
+the mouse still work, and **I** brings it all back. Each of those can also be switched off on its own in
+Settings, under *On screen*, where *Clean mode* makes every wall open that way.
+
 Press **H** in the wall for the list of controls, or rest the pointer on the top edge of the screen
 for a small menu bar with *Add videos*, *Add a folder*, *Controls*, *Save wall…*, *Settings* and *Close*.
 
@@ -164,6 +169,7 @@ of the whole PC slowing to a crawl.
 | `F5` | Reload the settings file |
 | `U` | Open the download page, when a newer version is available |
 | `Z` | The focused video back to normal size after magnifying |
+| `I` | Clean mode: hide the outline, progress line, menu bar, messages and pointer (again to bring them back) |
 | `0` | Unpin, unfocus and mute everything |
 | `Esc` | Close the controls list, else release pin/zoom, else quit |
 | `Q` | Quit and remember this session |
