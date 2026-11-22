@@ -72,7 +72,9 @@ if ($pinned) {
     $MpvDir = Join-Path $PSScriptRoot "build\mpv-$MpvRelease"
     if (Test-Path $MpvDir) { Remove-Item $MpvDir -Recurse -Force }
     New-Item -ItemType Directory -Force $MpvDir | Out-Null
-    tar -xf $archive -C $MpvDir     # Windows' own tar (libarchive) reads .7z
+    # Windows' own tar (libarchive) reads .7z. By full path: Git's GNU tar, first on PATH in a Git Bash
+    # session, cannot, and reads "C:" as a remote host.
+    & (Join-Path $env:SystemRoot 'System32\tar.exe') -xf $archive -C $MpvDir
     if ($LASTEXITCODE -ne 0) { throw "Could not unpack $archive" }
 }
 $mpvExe = Join-Path $MpvDir 'mpv.exe'
