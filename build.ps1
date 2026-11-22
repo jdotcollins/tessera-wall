@@ -170,7 +170,8 @@ Tessera Wall also includes Deno $DenoVersion (yt-dlp\deno.exe, from deno-x86_64-
 $DenoSha256), the JavaScript runtime yt-dlp uses for YouTube. Its licence follows at the end of this file.
   Project:        https://deno.com   https://github.com/denoland/deno
 
-Tessera Wall also includes Python (PSF licence), Tcl/Tk (BSD-style licence), tkinterdnd2 (MIT) and tkdnd (BSD).
+Tessera Wall also includes Python (PSF licence), Tcl/Tk (BSD-style licence), tkinterdnd2 (MIT), tkdnd (BSD) and
+truststore (MIT, https://github.com/sethmlarson/truststore).
 "@ | Set-Content (Join-Path $app 'THIRD-PARTY-NOTICES.txt') -Encoding utf8
 @("", "---- Deno $DenoVersion ----", "") + (Get-Content (Join-Path $PSScriptRoot 'licenses\deno-LICENSE.md')) |
     Add-Content (Join-Path $app 'THIRD-PARTY-NOTICES.txt') -Encoding utf8
