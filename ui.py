@@ -172,6 +172,7 @@ SETTINGS_UI = [
     ("choice", "SWITCH_SECONDS", "Move on", [(0, "Never"), (30, "After 30 s"), (60, "After 1 min"),
                                              (120, "After 2 min")]),
     ("check", "RANDOM_START", "Start videos at a random point"),
+    ("scale", "SOURCE_COUNT", "Videos from a channel or playlist link", 1, 24, 1, "{}"),
     ("section", "On screen"),
     ("check", "FOCUS_OUTLINE", "Outline the video you point at"),
     ("check", "SEEKBAR_HEIGHT", "Progress line and time on the video you point at", 6, 0),

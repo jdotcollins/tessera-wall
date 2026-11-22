@@ -32,3 +32,5 @@ jobs:
         run: python test_templates.py
       - name: Web links
         run: python test_ytdlp.py
+      - name: Channels and playlists
+        run: python test_sources.py

@@ -60,6 +60,16 @@ line. Each link plays at up to 1080p (`stream_max_height` in the settings file);
 start of a stream may play at a higher quality before the stream itself begins. Templates, **N** and
 *Move on* work with files in folders only, so they leave links alone.
 
+**Channels, Shorts and playlists.** Give a YouTube channel, one of its tabs or a playlist instead of a
+single video, for example `https://www.youtube.com/@NASA/shorts`, and the wall opens 6 random videos from
+it (*Videos from a channel or playlist link* in Settings). From then on that channel works like a folder:
+**N** swaps a video for another from it, **+** adds one more, **Page Down**/**Page Up** step through it in
+order, and *Move on* and *When a video ends: random* keep picking from it, so *Random* with a Shorts tab
+makes an endless wall of that creator's Shorts. A channel link on its own means its Videos tab. The newest
+500 videos are listed, which takes a few seconds for a big channel, and the list is remembered for a
+day. To keep data use down, each video asks for a quality that suits its share of the screen (720p with
+six on a 1440p monitor), never above `stream_max_height`.
+
 Live streams work while the channel is live. Sites change often and sometimes break playback for a while,
 so Tessera Wall keeps yt-dlp up to date (see *Updates*). If a link will not open, it checks for a newer
 yt-dlp straight away and tries the link again before giving up. YouTube also needs

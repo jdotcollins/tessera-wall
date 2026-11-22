@@ -346,6 +346,20 @@ folder on the development PC still has the old name; nothing depends on it.
   is reported; the wall stays open while a retry is pending (`retrying`). Only the own copy is ever
   updated, never with `update_check = false` or `ytdlp_path`. The uninstaller removes the own copy,
   `deno\` and `ytdlp.json`.
+- Link sources (`sources.py`): `source_of` recognises a YouTube channel (bare = its Videos tab), a tab
+  (videos / shorts / streams) or a playlist; single videos (watch?v=, even with &list=, shorts/ID,
+  youtu.be) are not sources. `Wall.add` hands a source to `open_source`, which lists it in a worker thread
+  with yt-dlp's flat mode (`--flat-playlist --playlist-items 1:500`, no format lookups: NASA's Shorts tab
+  ~2 s, a 5,500-video Videos tab ~50 s for all of it) and caches the list for a day in the state folder
+  (`pools\`). `take_pool_results` picks `source_count` random entries not on the wall and opens them two
+  at a time, 0.8 s apart (`pending_links`; YouTube may answer bursts with "confirm you're not a bot").
+  Each tile keeps `pool`; `pick_file` then picks from the source (random / next / prev), so N, +,
+  Page Down/Up, Move on and when-finished work as with folders. Sessions and saved walls store `pool`
+  per video (`load_session` returns (path, pos, pool)); a reopened video re-lists its source quietly
+  (n = 0), usually from the cache. An empty wall stays open while `waiting()` (retries, listings, pending
+  videos) and shows "Getting videos from …". Shorts start as 9:16 tiles. Quality: `sources.height_for`
+  gives each new link the smallest common height covering screen_h / sqrt(videos) (720p for 4-6 on
+  1440p), capped by `stream_max_height`; for a Short the cap applies to the width (`ytdlp.mpv_args`).
 - Links come in by command line, Send To,
   Ctrl+V (`ui.paste_async`) and browser drops (`DND_TEXT`, `ui.dropped_items`), all through
   `ytdlp.links_from_text`. Ctrl+V never calls Tk's `clipboard_get` on the Tk thread: an app that renders
@@ -465,6 +479,8 @@ powershell -ExecutionPolicy Bypass -File tests\sandbox\run.ps1   # clean PC in W
                                 # YouTube, first yt-dlp update, update check, uninstall. Report: build\sandbox\out\
 python tests/clean_test.py      # clean mode (I): outline, progress line, dimming, messages, menu bar off and on
 python tests/magnify_test.py    # Ctrl+wheel, drag and Z on a four-colour clip, checked by screen pixels
+python tests/sources_test.py    # NEEDS INTERNET + build.ps1 first: a channel's Shorts tab as a pool, N and +
+                                # pick from it, the session keeps it, --resume uses the cached list
 python tests/streams_test.py    # NEEDS INTERNET + build.ps1 first (packaged app): HLS, YouTube, live Twitch,
                                 # Ctrl+V paste (uses the clipboard), recovery from a broken updated yt-dlp
 python tests/add_test.py

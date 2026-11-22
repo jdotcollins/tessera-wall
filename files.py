@@ -66,13 +66,14 @@ def list_walls(config_path: str, limit: int = 4) -> list[tuple[str, list]]:
     return out
 
 
-def load_session(path: str) -> list[tuple[str, float]]:
-    """Videos from the last saved session as (path, position) pairs; files that are gone are skipped."""
+def load_session(path: str) -> list[tuple]:
+    """Videos from the last saved session as (path, position) pairs, or (path, position, source) for a
+    video picked from a channel or playlist (sources.py); files that are gone are skipped."""
     try:
         with open(path, encoding="utf-8") as f:
             videos = json.load(f)["videos"]
-        return [(v["path"], float(v.get("pos") or 0)) for v in videos
-                if "://" in v["path"] or os.path.isfile(v["path"])]
+        return [(v["path"], float(v.get("pos") or 0)) + ((v["pool"],) if v.get("pool") else ())
+                for v in videos if "://" in v["path"] or os.path.isfile(v["path"])]
     except (OSError, ValueError, KeyError, TypeError):
         return []
 

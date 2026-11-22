@@ -29,6 +29,7 @@ import updates
 from files import expand, save_wall
 import probe
 import resources
+import sources
 import templates
 import ytdlp
 from ui import fade, hover, paste_async, round_corners, settings_window
@@ -136,6 +137,7 @@ class Tile:
     switch_due: float | None = None   # when "move on" replaces this video (None: not timed)
     mag: float = 0.0             # magnification inside the video (mpv video-zoom, log2; 0 = normal)
     opened_at: float = 0.0       # position it was opened at (session / crash restart), for link_stalled
+    pool: str | None = None      # the channel / playlist (sources.py) it was picked from: N etc. pick from it
     pan: tuple = (0.0, 0.0)      # mpv video-pan-x / -y while magnified
 
 
@@ -200,6 +202,7 @@ class Wall:
         self.top_since: float | None = None   # when the pointer reached the top edge
         self.dialog_open = False
         self.failed: list[str] = []           # files mpv could not open, not yet reported
+        self.failed_why: dict[str, str] = {}  # sources (in failed) that could not be listed: why
         # Links that fail to open are retried (see open_failed): which yt-dlp each was tried with, the one
         # to use next, links that already had their update check, and retries still being prepared.
         self.link_tried: dict[str, list[str]] = {}
@@ -207,6 +210,15 @@ class Wall:
         self.link_checked: set[str] = set()
         self.link_retries: queue.Queue = queue.Queue()
         self.retrying = 0
+        # Link sources (sources.py): each source's videos, which source a video came from, video titles,
+        # lists still being fetched, and videos picked but not yet opened (they start two at a time).
+        self.pools: dict[str, list] = {}
+        self.pool_of: dict[str, str] = {}
+        self.title_of: dict[str, str] = {}
+        self.pool_results: queue.Queue = queue.Queue()
+        self.listing: set[str] = set()
+        self.pending_links = 0
+        self.status: tk.Label | None = None
         self.clean = bool(C.CLEAN_MODE)      # I: just the videos (see set_clean)
         self.last_shown: list = []           # tiles' (dim, osd level) last logged by relayout
         self.panning: Tile | None = None      # magnified video being dragged, with where the drag began
@@ -236,7 +248,15 @@ class Wall:
 
     # ---- tiles -------------------------------------------------------------
     def add(self, item):
-        path, start = item if isinstance(item, tuple) else (item, 0)
+        path, start, pool = (tuple(item) + (0, None))[:3] if isinstance(item, (tuple, list)) else (item, 0, None)
+        source = sources.source_of(path) if "://" in path else None
+        if source:                                   # a channel or playlist: open some of its videos
+            self.open_source(source, C.SOURCE_COUNT)
+            return
+        if pool:                                     # reopened from a session: keep picking from its source
+            self.pool_of[path] = pool
+            if pool not in self.pools and pool not in self.listing:
+                self.open_source(pool, 0)
         if len(self.tiles) >= C.MAX_VIDEOS:
             log.info("ignored (MAX_VIDEOS reached): %s", path)
             self.refused.append(f"at most {C.MAX_VIDEOS} videos")
@@ -254,7 +274,9 @@ class Wall:
             frame.destroy()
             return
         proc, pipe = started
-        self.tiles.append(Tile(path, frame, proc, pipe, time.monotonic(), opened_at=start or 0.0))
+        self.tiles.append(Tile(path, frame, proc, pipe, time.monotonic(), opened_at=start or 0.0,
+                               pool=self.pool_of.get(path), aspect=9 / 16 if sources.is_short(path) else 16 / 9))
+        self.clear_status()
         self.schedule_switch(self.tiles[-1])
         self.need_layout = True
         log.info("tile added #%d pipe=%s path=%s", self.counter, pipe, path)
@@ -293,8 +315,11 @@ class Wall:
             exe = self.link_next.pop(path, None) or ytdlp.find()
             if exe:
                 self.link_tried.setdefault(path, []).append(exe)
-            log.info("link uses yt-dlp %s", exe)
-            args += ytdlp.mpv_args(path, exe)
+            # Every video on its way counts: picked from a source, or still queued (a session reopening).
+            coming = len(self.tiles) + 1 + self.pending_links + self.incoming.qsize()
+            height = sources.height_for(coming, self.H, C.STREAM_MAX_HEIGHT)
+            log.info("link uses yt-dlp %s, up to %dp", exe, height)
+            args += ytdlp.mpv_args(path, exe, height)
             ytdlp.warm_in_background(path)        # Windows fetches any missing root certificate meanwhile
         args += list(C.EXTRA_MPV_ARGS) + ["--", path]
         try:
@@ -655,7 +680,16 @@ class Wall:
     def pick_file(self, t: Tile, how: str) -> str | None:
         """Another video from t's folder: "next" / "prev" in the folder's name order (wrapping), or
         "random". Files another tile shows are skipped. In a template wall only files of the tile's
-        shape count (from the shape cache), so the rows keep fitting. None if there is no other."""
+        shape count (from the shape cache), so the rows keep fitting. None if there is no other.
+        A video from a channel or playlist picks from that instead."""
+        if t.pool:
+            entries = self.pools.get(t.pool) or []
+            taken = {x.path for x in self.tiles}
+            e = (sources.pick(entries, 1, taken) or [None])[0] if how == "random" else \
+                sources.step(entries, t.path, 1 if how == "next" else -1, taken)
+            if e:
+                self.pool_of[e["url"]] = t.pool
+            return e["url"] if e else None
         if "://" in t.path:
             return None
         files = expand([os.path.dirname(t.path)])
@@ -680,13 +714,16 @@ class Wall:
         return None
 
     def no_other_message(self, t: Tile) -> str:
+        if t.pool:
+            return (f"Still listing {sources.label(t.pool)}" if t.pool in self.listing
+                    else f"No other videos in {sources.label(t.pool)}")
         return ("No other videos of this shape in this folder" if os.path.normcase(t.path) in self.shape_of
                 else "No other videos in this folder")
 
     def swap_random(self):
         """N: replace the focused video with a random other video from the same folder."""
         t = self.focus
-        if not t or not t.ipc or "://" in t.path:
+        if not t or not t.ipc or ("://" in t.path and not t.pool):
             return
         new = self.pick_file(t, "random")
         if new:
@@ -698,7 +735,7 @@ class Wall:
         """Page Down / Page Up: load the next / previous video from the focused tile's folder, in the
         folder's name order (same as opening the folder), wrapping at the ends."""
         t = self.focus
-        if not t or not t.ipc or "://" in t.path:
+        if not t or not t.ipc or ("://" in t.path and not t.pool):
             return
         new = self.pick_file(t, "next" if direction > 0 else "prev")
         if new:
@@ -788,8 +825,10 @@ class Wall:
         if t.mag:                                    # zoom and pan are player settings: they would stay too
             self.unmagnify(t, announce=False)
         self.schedule_switch(t)
+        if "://" in new:
+            ytdlp.warm_in_background(new)
         if announce:
-            t.ipc.post("show-text", os.path.basename(new), 2500)
+            t.ipc.post("show-text", self.title_of.get(new) or os.path.basename(new), 2500)
         t.path, t.swapped, t.aspect_known, t.born = new, True, False, time.monotonic()
         self.bar_next = 0.0
 
@@ -980,6 +1019,76 @@ class Wall:
             self.link_retries.put((path, exe))
         threading.Thread(target=work, daemon=True, name="link retry").start()
 
+    # ---- link sources: channels, Shorts tabs and playlists (sources.py) -------------------------------
+    def waiting(self) -> bool:
+        """Something will arrive without the user doing anything: a link retry, a channel being listed, or
+        picked videos still to be opened. An empty wall stays open meanwhile."""
+        return bool(self.retrying or self.listing or self.pending_links)
+
+    def open_source(self, source: str, n: int):
+        """List a source in a worker thread (cached for a day), then open n random videos from it (0: just
+        make it available, for videos reopened from a session)."""
+        if source in self.pools:
+            self.pool_results.put((source, self.pools[source], None, n))
+            return
+        self.listing.add(source)
+        log.info("listing %s for %d videos", source, n)
+        if n:
+            self.say_status(f"Getting videos from {sources.label(source)}…")
+
+        def work():
+            try:
+                self.pool_results.put((source, sources.load(source), None, n))
+            except Exception as e:
+                log.warning("could not list %s: %s", source, e)
+                self.pool_results.put((source, None, str(e), n))
+        threading.Thread(target=work, daemon=True, name="list source").start()
+
+    def take_pool_results(self):
+        """On the Tk thread: a source's list arrived. Pick n videos not already on the wall and open them
+        two at a time, 0.8 s apart, so YouTube does not get a burst of requests."""
+        while True:
+            try:
+                source, entries, error, n = self.pool_results.get_nowait()
+            except queue.Empty:
+                return
+            self.listing.discard(source)
+            if entries is None:
+                if n:
+                    self.failed.append(source)
+                    self.failed_why[source] = error or ""
+                self.clear_status()
+                continue
+            self.pools[source] = entries
+            self.title_of.update({e["url"]: e["title"] for e in entries})
+            picked = sources.pick(entries, n, {t.path for t in self.tiles})
+            log.info("%s: opening %d of %d videos", source, len(picked), len(entries))
+            for i, e in enumerate(picked):
+                self.pool_of[e["url"]] = source
+                self.pending_links += 1
+                self.root.after(800 * (i // 2), lambda url=e["url"]: self.open_picked(url))
+            if not picked:
+                self.clear_status()
+
+    def open_picked(self, url: str):
+        self.pending_links -= 1
+        if not self.closing:
+            self.add(url)
+
+    def say_status(self, text: str):
+        """A line of text on the empty wall while the first videos are on their way."""
+        if self.tiles or self.closing:
+            return
+        if self.status is None:
+            self.status = tk.Label(self.root, bg="black", fg="#9AA4AE", font=("Segoe UI", max(12, self.H // 60)))
+            self.status.place(relx=0.5, rely=0.5, anchor="center")
+        self.status.config(text=text)
+
+    def clear_status(self):
+        if self.status is not None:
+            self.status.destroy()
+            self.status = None
+
     def link_stalled(self, t: Tile, now: float) -> bool:
         """A link whose stream could not be read: mpv puts it at its end at once (seen when HTTPS
         verification failed), leaving a black tile. Only within the first 30 s, and only when the position is
@@ -1009,12 +1118,15 @@ class Wall:
 
     def report_failed(self):
         """Tell the user, in plain words, about files mpv could not open."""
-        if not self.failed or (self.retrying and not self.tiles):
+        if not self.failed or (self.waiting() and not self.tiles):
             return
         links = all("://" in p for p in self.failed)
         names = [p if "://" in p else (os.path.basename(p) or p) for p in self.failed]
         names = [n if len(n) <= 60 else n[:57] + "…" for n in names]
-        if len(names) == 1:
+        why = self.failed_why.pop(self.failed[0], None) if len(self.failed) == 1 else None
+        if why is not None:                          # a channel or playlist that could not be listed
+            msg = f"Couldn't get videos from {sources.label(self.failed[0])}" + (f": {why[:90]}" if why else ".")
+        elif len(names) == 1:
             msg = (f"Couldn't play \"{names[0]}\". " +
                    ("It may be offline, private or not a video." if links else
                     "The file may be damaged or not a video."))
@@ -1159,7 +1271,7 @@ class Wall:
         items = []
         for t in self.tiles:
             pos = t.ipc.value("time-pos") if t.ipc else None
-            items.append({"path": t.path, "pos": round(pos or 0, 1)})
+            items.append({"path": t.path, "pos": round(pos or 0, 1)} | ({"pool": t.pool} if t.pool else {}))
         if not items:
             return
         try:
@@ -1246,11 +1358,12 @@ class Wall:
             except queue.Empty:
                 break
         self.take_link_retries()
+        self.take_pool_results()
         self.report_failed()
         if self.closing:
             return
         if not self.tiles:
-            if self.retrying:                  # a failed link is about to be tried again: keep the wall
+            if self.waiting():                 # a retry or a channel list is on its way: keep the wall
                 self.root.after(C.TICK_MS, self.tick)
                 return
             return self.quit()
@@ -1389,7 +1502,7 @@ class Wall:
         """+: one more random video from the focused (or last) video's folder; of the same shape in a
         template wall. The wall re-arranges for the new count."""
         src = self.focus or (self.tiles[-1] if self.tiles else None)
-        if not src or not src.ipc or "://" in src.path:
+        if not src or not src.ipc or ("://" in src.path and not src.pool):
             return
         new = self.pick_file(src, "random")
         if not new:
@@ -1456,7 +1569,7 @@ class Wall:
     def save_wall_as(self):
         """Ctrl+S / menu: save the open videos and positions under a name, for the start window."""
         items = [{"path": t.path, "pos": round((t.ipc.value("time-pos") if t.ipc else 0) or 0, 1)}
-                 for t in self.tiles]
+                 | ({"pool": t.pool} if t.pool else {}) for t in self.tiles]
         if not items:
             return
         self.dialog_open = True

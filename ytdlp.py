@@ -129,14 +129,16 @@ def in_use() -> tuple:
     return exe, bundled_version() if exe == bundled_path() else None
 
 
-def mpv_args(item: str, exe: str | None = None) -> list[str]:
+def mpv_args(item: str, exe: str | None = None, height: int | None = None) -> list[str]:
     """Extra mpv options for one video: for a link, which yt-dlp to use (exe, else find()), Deno for it, and
     the highest quality to ask for (video and audio are fetched separately and joined by mpv, so no ffmpeg
-    is needed). Nothing for files."""
+    is needed): `height` (the wall's estimate for the tile's size) or stream_max_height, whichever is lower.
+    For a Short the limit applies to the width, its short side. Nothing for files."""
     if "://" not in item:
         return []
-    height = max(144, int(C.STREAM_MAX_HEIGHT or 1080))
-    args = ["--ytdl=yes", f"--ytdl-format=bestvideo[height<=?{height}]+bestaudio/best[height<=?{height}]/best"]
+    height = max(144, min(int(height or 99999), int(C.STREAM_MAX_HEIGHT or 1080)))
+    side = "width" if "/shorts/" in item else "height"
+    args = ["--ytdl=yes", f"--ytdl-format=bestvideo[{side}<=?{height}]+bestaudio/best[{side}<=?{height}]/best"]
     exe = exe or find()
     if exe:
         args.append(f"--script-opts-append=ytdl_hook-ytdl_path={exe}")

@@ -29,6 +29,8 @@ SETTINGS = [
     ("mpv", "YTDLP_PATH", "",
      "Full path to yt-dlp.exe, for links to web pages (YouTube...). Empty = the copy shipped with Tessera\n"
      "Wall, kept up to date daily (see update_check), else one on PATH. A yt-dlp you set here is never updated."),
+    ("mpv", "SOURCE_COUNT", 6,
+     "How many random videos a channel, Shorts tab or playlist link opens (N, + and Move on pick more)."),
     ("mpv", "STREAM_MAX_HEIGHT", 1080,
      "Highest picture height asked for from web links; lower saves bandwidth. (A Twitch pre-roll ad\n"
      "can play higher before the stream starts.)"),
