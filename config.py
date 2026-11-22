@@ -30,7 +30,8 @@ SETTINGS = [
      "Full path to yt-dlp.exe, for links to web pages (YouTube...). Empty = the copy shipped with Tessera\n"
      "Wall, kept up to date daily (see update_check), else one on PATH. A yt-dlp you set here is never updated."),
     ("mpv", "STREAM_MAX_HEIGHT", 1080,
-     "Highest picture height asked for from web links; lower saves bandwidth. Twitch ignores it."),
+     "Highest picture height asked for from web links; lower saves bandwidth. (A Twitch pre-roll ad\n"
+     "can play higher before the stream starts.)"),
     ("mpv", "VIDEO_EXTS", {".mp4", ".mkv", ".webm", ".mov", ".avi", ".m4v", ".wmv", ".flv", ".ts", ".m2ts",
                            ".mpg", ".mpeg", ".gif", ".y4m"},
      "File types picked up when you open a folder."),

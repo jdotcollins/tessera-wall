@@ -4,8 +4,8 @@ Run: python tests/streams_test.py
 
   A. a public HLS test stream, a YouTube video (Blender's Big Buck Bunny) and a live Twitch channel
      (LofiGirl, on air around the clock) on the command line: all open and report a picture size; YouTube
-     is capped at stream_max_height (720 here); Twitch is not (mpv's ytdl_hook plays its first, highest
-     quality whatever yt-dlp picks; see docs/DEVELOPMENT.md); the YouTube link was given Deno
+     is capped at stream_max_height (720 here); Twitch's size is not checked, because its stitched pre-roll
+     ad plays at 1080p on every variant for ~30 s (see docs/DEVELOPMENT.md); the YouTube link was given Deno
   B. a wall with one local clip; the HLS link is put on the clipboard and Ctrl+V adds it as a second video
   C. recovery: Tessera Wall's own yt-dlp copy claims a newer version but is broken (a copy of where.exe).
      The YouTube link fails with it, the update check finds the copy does not run and removes it, and the

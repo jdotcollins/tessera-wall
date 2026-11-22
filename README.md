@@ -56,8 +56,8 @@ puts a shortcut on the Desktop. `install.ps1 -Uninstall` removes them. Re-run it
 Links work as well as files: YouTube, Twitch and the other sites [yt-dlp](https://github.com/yt-dlp/yt-dlp)
 supports, and direct stream addresses (`.m3u8`, `.mp4` links, RTMP). Copy a link and press **Ctrl+V** in
 the start window or the wall, drag a link from your browser onto either, or give links on the command
-line. Each link plays at up to 1080p (`stream_max_height` in the settings file), except Twitch, which
-plays at the stream's own quality. Templates, **N** and
+line. Each link plays at up to 1080p (`stream_max_height` in the settings file); on Twitch an ad at the
+start of a stream may play at a higher quality before the stream itself begins. Templates, **N** and
 *Move on* work with files in folders only, so they leave links alone.
 
 Live streams work while the channel is live. Sites change often and sometimes break playback for a while,

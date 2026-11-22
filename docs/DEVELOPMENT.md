@@ -303,7 +303,10 @@ folder on the development PC still has the old name; nothing depends on it.
     (re-checked 5 s later) and otherwise loads `pick_file(next | random)`. Random start: `--start=N%`
     for new players, `loadfile <file> replace -1 start=N%` for swaps (the index argument exists since
     mpv 0.38; checked on the bundled 0.42), N in 5..80; restarts, saved walls and sessions keep their
-    positions. Ctrl+E rather than Shift+E: the wall binds the upper-case letter as the Caps Lock twin.
+    positions. Every swap passes its own `start` (`none` when random start is off) plus
+    `ab-loop-a=no,ab-loop-b=no`: mpv applies a launch-time `--start` to every file it loads and keeps
+    A-B loop points across `loadfile`, so without them the next video would open at the previous
+    one's restored position and inherit its loop (checked on 0.42; upstream mpv#18275, mpv#17953). Ctrl+E rather than Shift+E: the wall binds the upper-case letter as the Caps Lock twin.
     Settings choices come back from tk as text; `ui.typed` turns them back into numbers.
   - Small controls: 1–9 `focus_number` (set_pin, again to release). `+` `add_one`: `pick_file(random)`
     from the focused/last tile's folder, shape carried over, queued like any added file (the count no
@@ -353,12 +356,13 @@ folder on the development PC still has the old name; nothing depends on it.
   Verified: Mux and Apple HLS test streams; YouTube at 1080p60 with Deno (extraction ~0.6-1.3 s slower
   than without, warning gone); live Twitch (LofiGirl, on air around the clock: a dependable test channel);
   a real update from 2026.10.21 to 2026.10.26 in 3.8 s with the shipped copy untouched.
-  Known limit: `stream_max_height` does not hold for Twitch. Twitch offers each quality as one muxed HLS
-  stream; mpv's ytdl_hook (default `all_formats`) puts all of them in an EDL, and the track mpv selects is
-  labelled with yt-dlp's choice (e.g. "720p") but decodes the first EDL entry, the 1080p source; only that
-  one video track is exposed, so switching `vid` cannot help. `ytdl_hook-all_formats=no` instead wraps the
-  single live stream in an EDL that mpv cannot play ("no audio or video data played"). Fixing it would
-  mean resolving the variant URL with yt-dlp ourselves and handing mpv the m3u8; not done, for stability.
+  Twitch and `stream_max_height`: this does hold. Twitch offers each quality as one muxed HLS stream;
+  mpv's ytdl_hook (default `all_formats`) makes each one an edition of an EDL and selects yt-dlp's choice,
+  so only that edition's tracks are listed. The first ~30 s can still decode at 1080p: Twitch stitches a
+  pre-roll ad (`twitch-stitched-ad` in the playlist) into every variant, and the ad is 1080p whatever the
+  variant. Checked 2026-11-22 on LofiGirl with mpv 0.42 and the 720p cap: mpv opened the 720p playlist,
+  decoded 1920x1080 during the ad, then switched to 1280x720 when the stream began ("Reset playback due
+  to audio timestamp reset" at the join). An earlier note here blamed mpv for this; it was the ad.
 
 ## GPU driver timeouts
 

@@ -683,12 +683,16 @@ class Wall:
         if old:
             self.shape_of[os.path.normcase(new)] = old
         t.swap_seq = t.ipc.seq
-        if C.RANDOM_START and "://" not in new:      # index -1: append position unused with "replace"
+        # The player was launched with a global --start (session position, crash restart or random start),
+        # which mpv applies to every file it loads, and A-B loop points also survive a loadfile. So every
+        # swap states its own start and clears the loop. Index -1: append position, unused with "replace".
+        if C.RANDOM_START and "://" not in new:
             pct = random.randint(5, 80)
-            t.ipc.post("loadfile", new, "replace", "-1", f"start={pct}%")
+            start = f"{pct}%"
             log.info("random start %d%%: %s", pct, new)
         else:
-            t.ipc.post("loadfile", new, "replace")
+            start = "none"
+        t.ipc.post("loadfile", new, "replace", "-1", f"start={start},ab-loop-a=no,ab-loop-b=no")
         self.schedule_switch(t)
         if announce:
             t.ipc.post("show-text", os.path.basename(new), 2500)
