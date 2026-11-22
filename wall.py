@@ -73,7 +73,7 @@ HELP_SECTIONS = [
         (["R"], "Restart all from the beginning"),
         (["Page Down", "Page Up"], "Next / previous file from its folder"),
         (["N"], "Swap for a random file from its folder"),
-        (["E"], "When a video ends: play again, next file, random file"),
+        (["E"], "When a video ends: play again, next, random (its own for channel videos)"),
         (["Ctrl+E"], "Move on to another file every 30 s / 1 min / 2 min / never"),
         (["G"], "Sync: every video follows the focused one (again to stop)"),
         (["Ctrl+G"], "Sync, keeping each video's current time difference"),
@@ -138,6 +138,9 @@ class Tile:
     mag: float = 0.0             # magnification inside the video (mpv video-zoom, log2; 0 = normal)
     opened_at: float = 0.0       # position it was opened at (session / crash restart), for link_stalled
     pool: str | None = None      # the channel / playlist (sources.py) it was picked from: N etc. pick from it
+    ready: dict | None = None    # a source's next video, looked up ahead: {url, how, r (ytdlp.resolve), at}
+    preparing: bool = False
+    fade: object = None          # None, "hold" (black while the next video loads) or the fade-in start time
     pan: tuple = (0.0, 0.0)      # mpv video-pan-x / -y while magnified
 
 
@@ -219,6 +222,8 @@ class Wall:
         self.listing: set[str] = set()
         self.pending_links = 0
         self.status: tk.Label | None = None
+        self.prepared: queue.Queue = queue.Queue()        # (tile, url, how, resolve result) from workers
+        self.prepare_slots = threading.Semaphore(2)       # lookups at once, so YouTube gets no burst
         self.clean = bool(C.CLEAN_MODE)      # I: just the videos (see set_clean)
         self.last_shown: list = []           # tiles' (dim, osd level) last logged by relayout
         self.panning: Tile | None = None      # magnified video being dragged, with where the drag began
@@ -229,6 +234,7 @@ class Wall:
         self.layout_mode = C.LAYOUT_MODE if C.LAYOUT_MODE in LAYOUT_MODES else "grow"
         self.crop_mode = C.CROP_MODE if C.CROP_MODE in CROP_MODES else "limited"
         self.end_mode = C.WHEN_FINISHED if C.WHEN_FINISHED in END_MODES else "loop"
+        self.source_end = C.SOURCE_WHEN_FINISHED if C.SOURCE_WHEN_FINISHED in END_MODES else "random"
         self.switch_seconds = max(0, C.SWITCH_SECONDS)
         log.info("start W=%d H=%d", self.W, self.H)
 
@@ -287,7 +293,7 @@ class Wall:
         pipe = rf"\\.\pipe\tesserawall-{os.getpid()}-{self.counter}"
         args = [self.mpv, f"--wid={frame.winfo_id()}", f"--input-ipc-server={pipe}",
                 "--mute=yes", "--osc=no", "--input-default-bindings=no", "--input-vo-keyboard=no",
-                "--input-cursor=no", "--cursor-autohide=no", f"--loop-file={self.loop_file()}", "--keep-open=yes",
+                "--input-cursor=no", "--cursor-autohide=no", f"--loop-file={self.loop_file(self.pool_of.get(path))}", "--keep-open=yes",
                 "--force-window=yes", "--no-terminal", "--hwdec=auto-safe", "--panscan=0"]
         osd = max(16, self.H // 60)                     # 24 px on a 1440p screen, whatever the tile size
         args += ["--osd-scale-by-window=no", f"--osd-font-size={osd}", "--osd-font=Segoe UI",
@@ -412,7 +418,7 @@ class Wall:
             if t.ipc and ps != t.panscan:
                 t.ipc.set_async("panscan", ps)
                 t.panscan = ps
-            if t.ipc and dim != t.dim:
+            if t.ipc and dim != t.dim and t.fade is None:
                 t.ipc.set_async("brightness", dim)
                 t.dim = dim
             # Economy mode: unfocused videos skip B-frames in the decoder; the focused one decodes fully.
@@ -725,9 +731,10 @@ class Wall:
         t = self.focus
         if not t or not t.ipc or ("://" in t.path and not t.pool):
             return
-        new = self.pick_file(t, "random")
+        ready = self.take_ready(t, "random")
+        new = ready["url"] if ready else self.pick_file(t, "random")
         if new:
-            self.load_into(t, new)
+            self.load_into(t, new, ready=ready)
         else:
             t.ipc.post("show-text", self.no_other_message(t))
 
@@ -746,10 +753,12 @@ class Wall:
     def advance(self, t: Tile):
         """A video ended with "when finished" set to next or random: load that file and play it. With no
         other file to go to, play the same one again."""
-        new = self.pick_file(t, self.end_mode)
-        log.info("finished (%s): %s", self.end_mode, t.path)
+        mode = self.mode_of(t)
+        ready = self.take_ready(t, mode)
+        new = ready["url"] if ready else self.pick_file(t, mode)
+        log.info("finished (%s): %s", mode, t.path)
         if new:
-            self.load_into(t, new, announce=t is self.focus)
+            self.load_into(t, new, announce=t is self.focus, ready=ready)
         else:
             t.swap_seq = t.ipc.seq                 # this end has been handled
             t.ipc.post("seek", 0, "absolute")
@@ -769,10 +778,12 @@ class Wall:
         if t is self.focus or self.sync or self.blanked is not None or not t.ipc:
             t.switch_due = now + 5
             return
-        new = self.pick_file(t, self.end_mode if self.end_mode != "loop" else "random")
+        how = self.mode_of(t) if self.mode_of(t) != "loop" else "random"
+        ready = self.take_ready(t, how)
+        new = ready["url"] if ready else self.pick_file(t, how)
         if new:
             log.info("moved on after %ds: %s", self.switch_seconds, t.path)
-            self.load_into(t, new, announce=False)
+            self.load_into(t, new, announce=False, ready=ready)
         else:
             self.schedule_switch(t, now)
 
@@ -791,21 +802,38 @@ class Wall:
             target.ipc.post("show-text", f"Move on: after {self.switch_seconds} s" if self.switch_seconds
                             else "Move on: never", 2000)
 
-    def loop_file(self) -> str:
-        return "inf" if self.end_mode == "loop" else "no"
+    def mode_of(self, t: Tile) -> str:
+        """What t does when it ends: a channel or playlist video follows source_end, anything else end_mode."""
+        return self.source_end if t.pool else self.end_mode
 
-    def cycle_end_mode(self, to: str | None = None):
-        """E (or the Settings window): what videos do when they end. Applies to the open players at once."""
+    def loop_file(self, pool: str | None = None) -> str:
+        return "inf" if (self.source_end if pool else self.end_mode) == "loop" else "no"
+
+    def cycle_end_mode(self, to: str | None = None, sources_too: bool = False):
+        """E (or the Settings window): what videos do when they end. Applies to the open players at once.
+        E while pointing at a channel or playlist video changes what those do instead."""
+        if to is None and self.focus and self.focus.pool:
+            return self.set_source_end(END_MODES[(END_MODES.index(self.source_end) + 1) % len(END_MODES)], True)
         self.end_mode = to or END_MODES[(END_MODES.index(self.end_mode) + 1) % len(END_MODES)]
         log.info("when finished -> %s", self.end_mode)
         for t in self.tiles:
-            if t.ipc:
+            if t.ipc and not t.pool:
                 t.ipc.set_async("loop-file", self.loop_file())
                 if to is None:
                     t.ipc.post("show-text", f"When a video ends: {END_LABELS[self.end_mode]}", 2000)
 
-    def load_into(self, t: Tile, new: str, announce: bool = True):
-        log.info("file swapped: %s -> %s", t.path, new)
+    def set_source_end(self, mode: str, announce: bool = False):
+        self.source_end = mode
+        log.info("when a channel video ends -> %s", mode)
+        label = {"loop": "play it again", "next": "the next in it", "random": "another from it"}[mode]
+        for t in self.tiles:
+            if t.ipc and t.pool:
+                t.ipc.set_async("loop-file", self.loop_file(t.pool))
+                if announce:
+                    t.ipc.post("show-text", f"When a channel video ends: {label}", 2000)
+
+    def load_into(self, t: Tile, new: str, announce: bool = True, ready: dict | None = None):
+        log.info("file swapped: %s -> %s%s", t.path, new, " (prepared)" if ready and ready.get("r") else "")
         if self.sync_offsets:
             self.sync_offsets.pop(t, None)           # a different file has no meaningful offset
         old = self.shape_of.get(os.path.normcase(t.path))
@@ -821,7 +849,16 @@ class Wall:
             log.info("random start %d%%: %s", pct, new)
         else:
             start = "none"
-        t.ipc.post("loadfile", new, "replace", "-1", f"start={start},ab-loop-a=no,ab-loop-b=no")
+        r = ready.get("r") if ready else None
+        if r:      # looked up ahead: open the streams themselves, as mpv's yt-dlp hook would (see ytdlp.resolve)
+            t.ipc.post("loadfile", r["urls"][0], "replace", "-1",
+                       f"start={start},ab-loop-a=no,ab-loop-b=no," + ytdlp.loadfile_options(r))
+        else:
+            t.ipc.post("loadfile", new, "replace", "-1", f"start={start},ab-loop-a=no,ab-loop-b=no")
+        t.ready, t.preparing = None, False
+        if "://" in new:   # black until the new picture arrives, instead of the old video's last frame
+            t.ipc.set_async("brightness", -100)
+            t.dim, t.fade = -100, "hold"
         if t.mag:                                    # zoom and pan are player settings: they would stay too
             self.unmagnify(t, announce=False)
         self.schedule_switch(t)
@@ -1070,6 +1107,75 @@ class Wall:
             if not picked:
                 self.clear_status()
 
+    # ---- the next video of a channel, ready ahead; fading between videos -------------------------------
+    FADE_S = 0.35
+
+    def prepare_next(self, now: float):
+        """For each playing channel or playlist video that will move on (when it ends, or Move on), pick its
+        successor now and look its streams up in a worker thread (two at a time), so the switch skips the
+        2-4 s lookup. A prepared pick older than 2 hours is dropped (YouTube's addresses expire)."""
+        for t in self.tiles:
+            if not t.pool or not t.ipc or not t.aspect_known or t.preparing or self.closing:
+                continue
+            if t.ready and now - t.ready["at"] > 7200:
+                t.ready = None
+            mode = self.mode_of(t)
+            how = mode if mode != "loop" else ("random" if self.switch_seconds else None)
+            if t.ready or not how:
+                continue
+            url = self.pick_file(t, how)
+            if not url:
+                continue
+            t.preparing = True
+            coming = len(self.tiles) + self.pending_links + self.incoming.qsize()
+            height = sources.height_for(coming, self.H, C.STREAM_MAX_HEIGHT)
+
+            def work(t=t, url=url, how=how, height=height):
+                with self.prepare_slots:
+                    try:
+                        r = ytdlp.resolve(url, height)
+                    except Exception as e:
+                        log.info("could not prepare %s: %s", url, e)
+                        r = None
+                self.prepared.put((t, url, how, r))
+            threading.Thread(target=work, daemon=True, name="prepare next").start()
+
+    def take_prepared(self):
+        while True:
+            try:
+                t, url, how, r = self.prepared.get_nowait()
+            except queue.Empty:
+                return
+            if t in self.tiles and t.preparing:
+                t.preparing = False
+                t.ready = {"url": url, "how": how, "r": r, "at": time.monotonic()}
+                log.info("next ready%s: %s", "" if r else " (page link only)", url)
+
+    def take_ready(self, t: Tile, how: str) -> dict | None:
+        """t's prepared next video, if it was picked the way now wanted and is not on the wall meanwhile."""
+        ready, t.ready = t.ready, None
+        if ready and ready["how"] == how and ready["url"] not in {x.path for x in self.tiles}:
+            return ready
+        return None
+
+    def update_fades(self, now: float):
+        """Fade a switched video in from black once its picture arrived (or after 10 s regardless)."""
+        for t in self.tiles:
+            if t.fade is None or not t.ipc:
+                continue
+            if t.fade == "hold":
+                if now - t.born > 10:
+                    t.fade = now
+                continue
+            target = -C.DIM_UNFOCUSED if (self.focus and t is not self.focus and not self.clean) else 0
+            p = min(1.0, (now - t.fade) / self.FADE_S)
+            value = round(-100 + (target + 100) * p)
+            if p >= 1:
+                t.fade = None
+            if value != t.dim:
+                t.ipc.set_async("brightness", value)
+                t.dim = value
+
     def open_picked(self, url: str):
         self.pending_links -= 1
         if not self.closing:
@@ -1165,6 +1271,8 @@ class Wall:
         self.reload_config(quiet=True)
         if "WHEN_FINISHED" in names and C.WHEN_FINISHED in END_MODES:
             self.cycle_end_mode(C.WHEN_FINISHED)
+        if "SOURCE_WHEN_FINISHED" in names and C.SOURCE_WHEN_FINISHED in END_MODES:
+            self.set_source_end(C.SOURCE_WHEN_FINISHED)
         if "SWITCH_SECONDS" in names:
             self.cycle_switch(C.SWITCH_SECONDS)
         if "CLEAN_MODE" in names:
@@ -1316,7 +1424,7 @@ class Wall:
             elif "://" in t.path and t.aspect_known and self.link_stalled(t, now):
                 self.open_failed(t.path)
                 self.remove(t, "the link ended without playing")
-            elif t.aspect_known and self.end_mode != "loop" and t.ipc.value("eof-reached") \
+            elif t.aspect_known and self.mode_of(t) != "loop" and t.ipc.value("eof-reached") \
                     and t.ipc.value_seq("eof-reached") > t.swap_seq:
                 self.advance(t)          # it ended (keep-open paused it on its last frame): next / random file
             elif t.aspect_known and t.switch_due and now >= t.switch_due:
@@ -1348,6 +1456,8 @@ class Wall:
                     t.size = (w, h)
                     t.aspect_known = True
                     self.need_layout = True
+                    if t.fade == "hold":
+                        t.fade = now
                     log.info("aspect known %.4f (%sx%s rot=%s): %s", t.aspect, w, h, rot, t.path)
                 elif now - t.born > ASPECT_TIMEOUT:
                     t.aspect_known = True
@@ -1359,6 +1469,9 @@ class Wall:
                 break
         self.take_link_retries()
         self.take_pool_results()
+        self.take_prepared()
+        self.update_fades(now)
+        self.prepare_next(now)
         self.report_failed()
         if self.closing:
             return

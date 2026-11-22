@@ -172,6 +172,8 @@ SETTINGS_UI = [
     ("choice", "SWITCH_SECONDS", "Move on", [(0, "Never"), (30, "After 30 s"), (60, "After 1 min"),
                                              (120, "After 2 min")]),
     ("check", "RANDOM_START", "Start videos at a random point"),
+    ("choice", "SOURCE_WHEN_FINISHED", "When a channel or playlist video ends",
+     [("random", "Another from it"), ("next", "The next in it"), ("loop", "Play it again")]),
     ("scale", "SOURCE_COUNT", "Videos from a channel or playlist link", 1, 24, 1, "{}"),
     ("section", "On screen"),
     ("check", "FOCUS_OUTLINE", "Outline the video you point at"),

@@ -78,6 +78,9 @@ SETTINGS = [
     ("audio", "VOLUME_STEP", 5, "Volume change per Up/Down press."),
 
     ("controls", "SEEK_SECONDS", 5, "Seek step for the arrow keys and wheel."),
+    ("controls", "SOURCE_WHEN_FINISHED", "random",
+     'What a video from a channel or playlist does when it ends: "random" (another from it), "next" (the\n'
+     'next in it) or "loop". E switches it while pointing at such a video.'),
     ("controls", "WHEN_FINISHED", "loop",
      'What a video does when it ends: "loop" (play it again), "next" (the next file in its folder) or\n'
      '"random" (a random file from its folder). E in the wall switches between them.'),

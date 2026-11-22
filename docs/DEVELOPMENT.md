@@ -360,6 +360,18 @@ folder on the development PC still has the old name; nothing depends on it.
   videos) and shows "Getting videos from …". Shorts start as 9:16 tiles. Quality: `sources.height_for`
   gives each new link the smallest common height covering screen_h / sqrt(videos) (720p for 4-6 on
   1440p), capped by `stream_max_height`; for a Short the cap applies to the width (`ytdlp.mpv_args`).
+- Channel videos as a feed. `mode_of(t)`: source videos follow `source_end` (`source_when_finished`,
+  default random; E while pointing at one), others `end_mode`; loop-file is set per player. Switching by
+  page link costs 3.4-4.1 s (mpv's hook runs yt-dlp + Deno). So `prepare_next` picks each source video's
+  successor as soon as it plays and resolves it in a worker (`ytdlp.resolve`: yt-dlp -j with the player's
+  format; two at a time, `prepare_slots`); `advance`, `timed_switch` and N take it (`take_ready`, only if
+  picked the same way and not on the wall meanwhile) and `load_into` opens the streams directly with
+  `ytdlp.loadfile_options`: the audio as `audio-files-append`, the title as `force-media-title`, and, as
+  the hook does, yt-dlp's User-Agent and `curl-max-request-size` (YouTube answers 403 to requests over
+  ~10 MiB or with another User-Agent). Measured: picture in ~0.4 s. The tile keeps the page link as its
+  path. A switch to a link sets brightness -100 (`fade = "hold"`) so the last frame never lingers;
+  `update_fades` fades in over 0.35 s once the picture arrives (or after 10 s); relayout leaves
+  brightness alone meanwhile.
 - Links come in by command line, Send To,
   Ctrl+V (`ui.paste_async`) and browser drops (`DND_TEXT`, `ui.dropped_items`), all through
   `ytdlp.links_from_text`. Ctrl+V never calls Tk's `clipboard_get` on the Tk thread: an app that renders

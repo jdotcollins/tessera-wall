@@ -129,6 +129,14 @@ def in_use() -> tuple:
     return exe, bundled_version() if exe == bundled_path() else None
 
 
+def format_for(item: str, height: int | None = None) -> str:
+    """yt-dlp format for a link: best video up to `height` (and stream_max_height) plus best audio; for a
+    Short the limit is on the width, its short side."""
+    height = max(144, min(int(height or 99999), int(C.STREAM_MAX_HEIGHT or 1080)))
+    side = "width" if "/shorts/" in item else "height"
+    return f"bestvideo[{side}<=?{height}]+bestaudio/best[{side}<=?{height}]/best"
+
+
 def mpv_args(item: str, exe: str | None = None, height: int | None = None) -> list[str]:
     """Extra mpv options for one video: for a link, which yt-dlp to use (exe, else find()), Deno for it, and
     the highest quality to ask for (video and audio are fetched separately and joined by mpv, so no ffmpeg
@@ -136,9 +144,7 @@ def mpv_args(item: str, exe: str | None = None, height: int | None = None) -> li
     For a Short the limit applies to the width, its short side. Nothing for files."""
     if "://" not in item:
         return []
-    height = max(144, min(int(height or 99999), int(C.STREAM_MAX_HEIGHT or 1080)))
-    side = "width" if "/shorts/" in item else "height"
-    args = ["--ytdl=yes", f"--ytdl-format=bestvideo[{side}<=?{height}]+bestaudio/best[{side}<=?{height}]/best"]
+    args = ["--ytdl=yes", f"--ytdl-format={format_for(item, height)}"]
     exe = exe or find()
     if exe:
         args.append(f"--script-opts-append=ytdl_hook-ytdl_path={exe}")
@@ -232,14 +238,56 @@ def links_from_text(text: str) -> list[str]:
 
 
 # ---- keeping Tessera Wall's own copy current ----------------------------------------------------------
-def run(args: list[str], timeout: float) -> tuple[int, str]:
+def run(args: list[str], timeout: float, env: dict | None = None) -> tuple[int, str]:
     """(exit code, output) of a yt-dlp command; (-1, reason) if it could not run. Replaced in tests."""
     try:
         done = subprocess.run(args, capture_output=True, text=True, encoding="utf-8", errors="replace",
-                              timeout=timeout, creationflags=subprocess.CREATE_NO_WINDOW)
+                              timeout=timeout, creationflags=subprocess.CREATE_NO_WINDOW, env=env)
         return done.returncode, (done.stdout or "") + (done.stderr or "")
     except (OSError, subprocess.TimeoutExpired) as e:
         return -1, str(e)
+
+
+def resolve(link: str, height: int | None = None, exe: str | None = None) -> dict | None:
+    """Blocking: what the player would get for a link, looked up ahead so a channel's next video can start at
+    once instead of after the 2-4 s lookup. {"urls": [video, audio?], "user_agent", "chunk", "title"}, or
+    None. YouTube rejects requests for more than ~10 MiB at a time and requests without the User-Agent yt-dlp
+    used (HTTP 403), so both go with the addresses, as mpv's own yt-dlp hook does. Addresses last hours."""
+    exe = exe or find()
+    if not exe:
+        return None
+    args = [exe, "--no-warnings", "-j", "--no-playlist", "-f", format_for(link, height)]
+    if os.path.isfile(deno_path()):
+        args += ["--js-runtimes", f"deno:{deno_path()}"]
+    code, out = run(args + ["--", link], 60, env=mpv_env(link))
+    try:
+        info = json.loads(next(l for l in out.splitlines() if l.startswith("{")))
+    except (StopIteration, ValueError):
+        return None
+    formats = info.get("requested_formats") or [info]
+    urls = [f.get("url") for f in formats if isinstance(f.get("url"), str) and f["url"].startswith("http")]
+    if code != 0 or not urls:
+        return None
+    first = formats[0]
+    chunk = ((first.get("downloader_options") or {}).get("http_chunk_size")
+             or (info.get("downloader_options") or {}).get("http_chunk_size"))
+    return {"urls": urls[:2], "user_agent": (first.get("http_headers") or {}).get("User-Agent"),
+            "chunk": int(chunk) if chunk else None, "title": info.get("title") or ""}
+
+
+def loadfile_options(r: dict) -> str:
+    """mpv loadfile per-file options for a resolve() result (each value length-quoted: %n%...)."""
+    q = lambda v: f"%{len(v)}%{v}"
+    opts = []
+    if len(r["urls"]) > 1:
+        opts.append("audio-files-append=" + q(r["urls"][1]))
+    if r.get("user_agent"):
+        opts.append("user-agent=" + q(r["user_agent"]))
+    if r.get("chunk"):
+        opts.append(f"curl-max-request-size={r['chunk']}")
+    if r.get("title"):
+        opts.append("force-media-title=" + q(r["title"]))
+    return ",".join(opts)
 
 
 def version_of(exe: str) -> str | None:

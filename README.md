@@ -64,8 +64,11 @@ start of a stream may play at a higher quality before the stream itself begins. 
 single video, for example `https://www.youtube.com/@NASA/shorts`, and the wall opens 6 random videos from
 it (*Videos from a channel or playlist link* in Settings). From then on that channel works like a folder:
 **N** swaps a video for another from it, **+** adds one more, **Page Down**/**Page Up** step through it in
-order, and *Move on* and *When a video ends: random* keep picking from it, so *Random* with a Shorts tab
-makes an endless wall of that creator's Shorts. A channel link on its own means its Videos tab. The newest
+order, and *Move on* keeps picking from it. When one of its videos ends, another from it takes its place,
+so a Shorts tab becomes an endless wall of that creator's Shorts (*When a channel or playlist video ends*
+in Settings, or **E** while pointing at one, changes that to the next in order or to playing it again).
+While a video plays, Tessera Wall looks up the one that will follow it, so the switch takes about half a
+second instead of several, and the tile fades through black rather than freezing on the last frame. A channel link on its own means its Videos tab. The newest
 500 videos are listed, which takes a few seconds for a big channel, and the list is remembered for a
 day. To keep data use down, each video asks for a quality that suits its share of the screen (720p with
 six on a 1440p monitor), never above `stream_max_height`.
