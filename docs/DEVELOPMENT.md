@@ -364,6 +364,15 @@ folder on the development PC still has the old name; nothing depends on it.
   decoded 1920x1080 during the ad, then switched to 1280x720 when the stream began ("Reset playback due
   to audio timestamp reset" at the join). An earlier note here blamed mpv for this; it was the ad.
 
+- Magnify (`Wall.magnify`, `drag_pan`, `unmagnify`; maths in `layout.py`: `drawn_size`, `pan_limit`,
+  `clamp_pan`, `magnify_at`). Per tile `mag` (mpv `video-zoom`, log2, 0..3 in 0.25 steps) and `pan`
+  (`video-pan-x/y`, fractions of the drawn size). The drawn size follows mpv: fit to the window, times
+  `1 + panscan * (r - 1)`, times `2**zoom`. Ctrl+wheel keeps the picture point under the pointer fixed;
+  pan is clamped so no picture edge comes into the cell (bars stay bars when the video is narrower).
+  A press on a magnified tile starts a look-around drag instead of a swap, and a moved drag is not a
+  click. Zoom and pan are player properties that survive `loadfile`, so `load_into` resets them; a
+  restarted player gets them resent on connect. Not saved in sessions or walls.
+
 ## GPU driver timeouts
 
 On the development PC (AMD GPU, Windows HDR on) the AMD "driver timeout" popup appeared several times
@@ -440,6 +449,7 @@ python tests/phase2_test.py     # speed, frame step, A-B loop, tracks, snapshot,
 python tests/phase3_test.py     # memory guard, Tab focus, sync, Ctrl+S save, saved-wall button
 python tests/phase4_test.py     # templates: CLI, Best fit, chooser, N within shape, short folder, when finished
 python tests/controls_test.py   # 1-9, + / -, Ctrl+B blackout (screen pixels), Ctrl+G offsets
+python tests/magnify_test.py    # Ctrl+wheel, drag and Z on a four-colour clip, checked by screen pixels
 python tests/streams_test.py    # NEEDS INTERNET + build.ps1 first (packaged app): HLS, YouTube, live Twitch,
                                 # Ctrl+V paste (uses the clipboard), recovery from a broken updated yt-dlp
 python tests/add_test.py

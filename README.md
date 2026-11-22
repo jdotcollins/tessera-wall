@@ -115,6 +115,11 @@ window as **Play template "…"** and opens with one click.
 From the command line: `--template "2x2 landscape" FOLDER`, or `--template best FOLDER` (no FOLDER for a
 template whose slots all have folders).
 
+To look closely at part of a video (a face in the crowd, a camera's corner, a scoreboard), hold **Ctrl**
+and turn the wheel over it: it magnifies around the spot you point at, and dragging moves the picture.
+The rest of the wall stays as it is. **Z** or Ctrl+wheel back brings it to normal size; a new file in
+that spot starts at normal size.
+
 Press **H** in the wall for the list of controls, or rest the pointer on the top edge of the screen
 for a small menu bar with *Add videos*, *Add a folder*, *Controls*, *Save wall…*, *Settings* and *Close*.
 
@@ -127,6 +132,8 @@ of the whole PC slowing to a crawl.
 | Hover | Focus a video: audio fades to it, it enlarges, the others dim |
 | Click | Pin the video so hover cannot change focus (click again to release) |
 | Double-click | Zoom the video to most of the screen (again to undo) |
+| `Ctrl`+wheel | Magnify the video under the pointer, up to 8x, around the spot you point at |
+| Drag a magnified video | Look around it |
 | Drag onto another video | Swap their positions |
 | Click / drag the bottom edge | Seek within the focused video |
 | `Tab` / `Shift+Tab` | Focus the next / previous video (moves the pin, if one is set) |
@@ -156,6 +163,7 @@ of the whole PC slowing to a crawl.
 | `Ctrl+B` | Black out: hide, pause and mute everything; `Ctrl+B` or `Esc` brings it all back |
 | `F5` | Reload the settings file |
 | `U` | Open the download page, when a newer version is available |
+| `Z` | The focused video back to normal size after magnifying |
 | `0` | Unpin, unfocus and mute everything |
 | `Esc` | Close the controls list, else release pin/zoom, else quit |
 | `Q` | Quit and remember this session |

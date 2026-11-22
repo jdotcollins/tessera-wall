@@ -1,7 +1,8 @@
 """Run with: python test_layout.py   (no pytest needed; exits non-zero on failure)"""
 import random
 
-from layout import Rect, arrange, choose, choose_rows, grid, grid_rows, layout, panscan_for
+from layout import (Rect, arrange, choose, choose_rows, clamp_pan, drawn_size, grid, grid_rows, layout,
+                    magnify_at, pan_limit, panscan_for)
 
 W, H = 2560, 1440
 
@@ -145,6 +146,36 @@ def test_panscan():
     assert abs(panscan_for(1280, 1440, 16 / 9, max_crop=0.10) - 0.1111) < 1e-3
     # small mismatch is fully absorbed by the crop budget
     assert panscan_for(1280, 760, 16 / 9, max_crop=0.10) == 1.0
+
+
+def test_magnify():
+    # a 16:9 video exactly filling a 16:9 cell: drawn at cell size, then doubled per +1 zoom
+    assert drawn_size(1600, 900, 16 / 9, 0, 0) == (1600, 900)
+    assert drawn_size(1600, 900, 16 / 9, 0, 1) == (3200, 1800)
+    # portrait video in a landscape cell, no panscan: fitted to the height, bars at the sides
+    w, h = drawn_size(1600, 900, 9 / 16, 0, 0)
+    assert abs(h - 900) < 1e-9 and abs(w - 506.25) < 1e-9
+    # panscan 1 = fill: the same video scaled up to the cell width
+    w, h = drawn_size(1600, 900, 9 / 16, 1, 0)
+    assert abs(w - 1600) < 1e-6
+    # not magnified: no room to pan; at 2x a filling video may move a quarter of its drawn size
+    assert pan_limit(1600, 900, 16 / 9, 0, 0) == (0, 0)
+    assert pan_limit(1600, 900, 16 / 9, 0, 1) == (0.25, 0.25)
+    assert clamp_pan(1600, 900, 16 / 9, 0, 1, (0.9, -0.9)) == (0.25, -0.25)
+    # bars stay bars: a narrow video magnified a little is still narrower than the cell, so no x pan
+    assert pan_limit(1600, 900, 9 / 16, 0, 0.5)[0] == 0
+    # magnifying about the centre keeps it centred; about the top-left quarter point, the picture moves
+    # so that point stays under the pointer: at 2x the pan is +1/8 of the drawn size on each axis
+    assert magnify_at(1600, 900, 16 / 9, 0, 0, (0, 0), 1, 0, 0) == (0, 0)
+    px, py = magnify_at(1600, 900, 16 / 9, 0, 0, (0, 0), 1, -400, -225)
+    assert abs(px - 0.125) < 1e-9 and abs(py - 0.125) < 1e-9
+    # the point really is fixed: picture fraction under the pointer before == after
+    w1, h1 = drawn_size(1600, 900, 16 / 9, 0, 0)
+    w2, h2 = drawn_size(1600, 900, 16 / 9, 0, 1)
+    assert abs((-400 / w1 - 0) - (-400 / w2 - px)) < 1e-9
+    # a pointer at the very corner cannot pull the edge into view
+    px, py = magnify_at(1600, 900, 16 / 9, 0, 0, (0, 0), 1, -800, -450)
+    assert (px, py) == (0.25, 0.25)
 
 
 if __name__ == "__main__":

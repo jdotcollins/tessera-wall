@@ -23,7 +23,7 @@ from layout import arrange
 from layout import grid
 from layout import grid_rows
 from layout import layout
-from layout import panscan_for
+from layout import clamp_pan, drawn_size, magnify_at, panscan_for
 import config as C
 import updates
 from files import expand, save_wall
@@ -49,6 +49,8 @@ HELP_SECTIONS = [
         ("Drag onto another", "Swap the two videos"),
         ("Bottom edge", "Click or drag to seek"),
         ("Wheel", "Seek; with Shift, seek every video"),
+        ("Ctrl+wheel", "Magnify the video at the pointer (Z: normal size)"),
+        ("Drag a magnified video", "Look around it"),
         ("Middle-click", "Close the video"),
         ("Top edge of screen", "Menu: add videos, controls, settings, close"),
     ]),
@@ -58,6 +60,7 @@ HELP_SECTIONS = [
         (["Tab", "Shift+Tab"], "Focus the next / previous video"),
         (["1", "…", "9"], "Focus video 1-9 (again to release)"),
         (["+", "-"], "One more video from the same folder / one fewer"),
+        (["Z"], "Focused video back to normal size (after Ctrl+wheel)"),
         (["0"], "Unpin, unfocus and mute everything"),
     ]),
     ("Playback", [
@@ -100,6 +103,8 @@ END_MODES = ("loop", "next", "random")
 END_LABELS = {"loop": "play it again", "next": "next file in its folder", "random": "random file from its folder"}
 CONNECT_TIMEOUT = 15.0   # seconds for mpv to create its IPC pipe
 ASPECT_TIMEOUT = 10.0    # seconds to wait for a video size before keeping the 16:9 guess
+MAG_STEP = 0.25          # Ctrl+wheel: magnification per notch, as mpv's video-zoom (log2): x1.19
+MAG_MAX = 3.0            # at most 8x
 
 
 @dataclass(eq=False)
@@ -127,6 +132,8 @@ class Tile:
     restarts: list = field(default_factory=list)   # times this tile's player was restarted after a crash
     size: tuple | None = None    # video width, height once known (for the memory estimate)
     switch_due: float | None = None   # when "move on" replaces this video (None: not timed)
+    mag: float = 0.0             # magnification inside the video (mpv video-zoom, log2; 0 = normal)
+    pan: tuple = (0.0, 0.0)      # mpv video-pan-x / -y while magnified
 
 
 def fmt_time(s: float) -> str:
@@ -197,6 +204,9 @@ class Wall:
         self.link_checked: set[str] = set()
         self.link_retries: queue.Queue = queue.Queue()
         self.retrying = 0
+        self.panning: Tile | None = None      # magnified video being dragged, with where the drag began
+        self.pan_from: tuple | None = None
+        self.pan_moved = False
         self.updates: updates.Checker | None = None   # set by main()
         self.update_shown = False
         self.layout_mode = C.LAYOUT_MODE if C.LAYOUT_MODE in LAYOUT_MODES else "grow"
@@ -482,6 +492,9 @@ class Wall:
         self.pressing, self.dragging, self.skip_release = True, False, False
         self.press_pos = (e.x_root, e.y_root)
         self.press_tile = None if self.press_in_bar else self.tile_under_cursor(self.press_pos)
+        t = self.press_tile
+        self.panning = t if t and t.mag > 0 else None      # dragging a magnified video looks around it
+        self.pan_from, self.pan_moved = ((self.press_pos, t.pan) if self.panning else None), False
         if self.press_in_bar:
             self.cmd("seek", round(frac * 100, 2), "absolute-percent")
             self.bar_next = 0.0
@@ -494,6 +507,8 @@ class Wall:
                 frac = min(1.0, max(0.0, (x - r.x) / max(1, r.w - 1)))
                 self.cmd("seek", round(frac * 100, 2), "absolute-percent+keyframes")
                 self.bar_next = 0.0
+        elif self.panning:
+            self.drag_pan(e)
         elif (self.press_tile and not self.dragging and len(self.tiles) > 1
               and abs(e.x_root - self.press_pos[0]) + abs(e.y_root - self.press_pos[1]) > C.DRAG_THRESHOLD):
             self.dragging = True
@@ -501,6 +516,11 @@ class Wall:
 
     def on_release(self, e):
         tile, self.press_tile, self.pressing = self.press_tile, None, False
+        panned, self.panning = self.pan_moved, None
+        if panned:                                   # a look-around drag is not a click
+            self.pan_moved = False
+            self.root.config(cursor="")
+            return
         if self.dragging:
             self.dragging = False
             self.root.config(cursor="")
@@ -522,6 +542,64 @@ class Wall:
         tile = self.tile_under_cursor((e.x_root, e.y_root))
         if tile and not self.click_was_zoomed:   # the first click of this double-click already (un)pinned
             self.set_pin(tile, zoom=True)
+
+    # ---- magnify: zoom and pan inside one video ------------------------------------------------------
+    def cell(self, t: Tile) -> tuple | None:
+        """(x, y, w, h) of the tile's player window, relative to the wall."""
+        if t.placed:
+            return t.placed
+        return (t.rect.x, t.rect.y, t.rect.w, t.rect.h) if t.rect else None
+
+    def send_magnify(self, t: Tile):
+        if t.ipc:
+            t.ipc.set_async("video-zoom", round(t.mag, 3))
+            t.ipc.set_async("video-pan-x", round(t.pan[0], 4))
+            t.ipc.set_async("video-pan-y", round(t.pan[1], 4))
+
+    def magnify(self, e, direction: int):
+        """Ctrl+wheel: magnify the video under the pointer, keeping the spot under the pointer in place
+        (zooming out stops at normal size). Pan is clamped so no edge of the picture comes into view."""
+        t = self.tile_under_cursor((e.x_root, e.y_root))
+        g = self.cell(t) if t else None
+        if not g or not t.ipc:
+            return
+        new = max(0.0, min(MAG_MAX, t.mag + direction * MAG_STEP))
+        if new == t.mag:
+            return
+        ux = e.x_root - self.root.winfo_rootx() - (g[0] + g[2] / 2)
+        uy = e.y_root - self.root.winfo_rooty() - (g[1] + g[3] / 2)
+        t.pan = (0.0, 0.0) if new == 0 else magnify_at(g[2], g[3], t.aspect, t.panscan or 0.0, t.mag, t.pan,
+                                                        new, ux, uy)
+        t.mag = new
+        self.send_magnify(t)
+        t.ipc.post("show-text", f"Magnify {2 ** new:.1f}x" if new else "Normal size", 1000)
+        log.info("magnify %.2f (x%.2f) pan=(%.4f, %.4f): %s", new, 2 ** new, t.pan[0], t.pan[1], t.path)
+
+    def drag_pan(self, e):
+        """Dragging a magnified video moves the picture with the pointer."""
+        t, (start, pan0) = self.panning, self.pan_from
+        g = self.cell(t) if t in self.tiles else None
+        dx, dy = e.x_root - start[0], e.y_root - start[1]
+        if not g or (not self.pan_moved and abs(dx) + abs(dy) <= C.DRAG_THRESHOLD):
+            return
+        if not self.pan_moved:
+            self.pan_moved = True
+            self.root.config(cursor="fleur")
+        dw, dh = drawn_size(g[2], g[3], t.aspect, t.panscan or 0.0, t.mag)
+        if dw and dh:
+            t.pan = clamp_pan(g[2], g[3], t.aspect, t.panscan or 0.0, t.mag,
+                              (pan0[0] + dx / dw, pan0[1] + dy / dh))
+            self.send_magnify(t)
+
+    def unmagnify(self, t: Tile | None, announce: bool = True):
+        """Z (and swapping in another file): the video back to normal size."""
+        if not t or not t.mag:
+            return
+        t.mag, t.pan = 0.0, (0.0, 0.0)
+        self.send_magnify(t)
+        if announce and t.ipc:
+            t.ipc.post("show-text", "Normal size", 1000)
+        log.info("magnify off: %s", t.path)
 
     def swap_tiles(self, a: Tile, b: Tile):
         i, j = self.tiles.index(a), self.tiles.index(b)
@@ -693,6 +771,8 @@ class Wall:
         else:
             start = "none"
         t.ipc.post("loadfile", new, "replace", "-1", f"start={start},ab-loop-a=no,ab-loop-b=no")
+        if t.mag:                                    # zoom and pan are player settings: they would stay too
+            self.unmagnify(t, announce=False)
         self.schedule_switch(t)
         if announce:
             t.ipc.post("show-text", os.path.basename(new), 2500)
@@ -1050,6 +1130,8 @@ class Wall:
                     t.ipc = MpvIpc(t.pipe, timeout=0, handshake=False)
                     t.ipc.observe("idle-active", "dwidth", "dheight", "video-params", "percent-pos",
                                   "time-pos", "duration", "pause", "eof-reached", "media-title")
+                    if t.mag:                # a restarted player starts at normal size
+                        self.send_magnify(t)
                     self.need_layout = True  # so panscan gets sent
                     if not self.hint_shown and (self.notice or C.SHOW_HELP_HINT):
                         self.hint_shown = True   # a startup problem with the settings file wins over the hint
@@ -1440,6 +1522,8 @@ class Wall:
         b("<Shift-Right>", lambda e: self.seek(1, everyone=True))
         b("<MouseWheel>", lambda e: self.seek(1 if e.delta > 0 else -1))
         b("<Shift-MouseWheel>", lambda e: self.seek(1 if e.delta > 0 else -1, everyone=True))
+        b("<Control-MouseWheel>", lambda e: self.magnify(e, 1 if e.delta > 0 else -1))
+        b("<z>", lambda e: self.unmagnify(self.focus))
         b("<r>", lambda e: self.restart_all())
         b("<Up>", lambda e: self.change_volume(C.VOLUME_STEP))
         b("<Down>", lambda e: self.change_volume(-C.VOLUME_STEP))

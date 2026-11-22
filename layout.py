@@ -317,3 +317,45 @@ def panscan_for(cell_w: int, cell_h: int, aspect: float, max_crop: float = 0.10)
     if max_crop >= 1:
         return 1.0
     return min(1.0, (1 / (1 - max_crop) - 1) / (r - 1))
+
+
+# ---- magnify (zoom and pan inside one video) -----------------------------------------------------------
+# mpv draws the video fitted to the window, scaled by 1 + panscan * (r - 1) (see panscan_for), then by
+# 2**video-zoom. video-pan-x/y move it by that fraction of the drawn size. Pointer offsets below are in
+# pixels from the window's centre.
+
+def drawn_size(cell_w: int, cell_h: int, aspect: float, panscan: float, mag: float) -> tuple[float, float]:
+    """Width and height in pixels at which mpv draws the video in a cell."""
+    if cell_w <= 0 or cell_h <= 0 or aspect <= 0:
+        return 0.0, 0.0
+    fit_w, fit_h = (cell_w, cell_w / aspect) if aspect >= cell_w / cell_h else (cell_h * aspect, cell_h)
+    r = max(cell_w / fit_w, cell_h / fit_h)
+    k = (1 + panscan * (r - 1)) * 2 ** mag
+    return fit_w * k, fit_h * k
+
+
+def pan_limit(cell_w: int, cell_h: int, aspect: float, panscan: float, mag: float) -> tuple[float, float]:
+    """Largest video-pan-x / -y that still keeps the drawn video over the whole cell along that axis
+    (0 where the video is not larger than the cell)."""
+    dw, dh = drawn_size(cell_w, cell_h, aspect, panscan, mag)
+    lx = max(0.0, (dw - cell_w) / 2 / dw) if dw else 0.0
+    ly = max(0.0, (dh - cell_h) / 2 / dh) if dh else 0.0
+    return lx, ly
+
+
+def clamp_pan(cell_w: int, cell_h: int, aspect: float, panscan: float, mag: float,
+              pan: tuple[float, float]) -> tuple[float, float]:
+    lx, ly = pan_limit(cell_w, cell_h, aspect, panscan, mag)
+    return max(-lx, min(lx, pan[0])), max(-ly, min(ly, pan[1]))
+
+
+def magnify_at(cell_w: int, cell_h: int, aspect: float, panscan: float, mag: float, pan: tuple[float, float],
+               new_mag: float, ux: float, uy: float) -> tuple[float, float]:
+    """The pan that keeps the picture point under the pointer (ux, uy) in place while the zoom goes from
+    mag to new_mag, clamped so no edge comes into the cell."""
+    w1, h1 = drawn_size(cell_w, cell_h, aspect, panscan, mag)
+    w2, h2 = drawn_size(cell_w, cell_h, aspect, panscan, new_mag)
+    if not (w1 and h1 and w2 and h2):
+        return 0.0, 0.0
+    vx, vy = ux / w1 - pan[0], uy / h1 - pan[1]          # the picture point, as a fraction from its centre
+    return clamp_pan(cell_w, cell_h, aspect, panscan, new_mag, (ux / w2 - vx, uy / h2 - vy))
