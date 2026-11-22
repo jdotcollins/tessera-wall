@@ -1,0 +1,6 @@
+# Python packages bundled into the packaged app, pinned by hash.
+#   python -m pip install --require-hashes -r requirements-build.txt
+# truststore (MIT): HTTPS checked by Windows' own certificate verification, so the update check works on a
+# fresh Windows that has not yet downloaded GitHub's root certificate (updates.py). Released 2026-10-12.
+truststore==0.10.5 \
+    --hash=sha256:9aaaedaefaf06d8b206278cf8b5012bc897f485a874503501e12d776df78951c

@@ -171,7 +171,7 @@ folder on the development PC still has the old name; nothing depends on it.
   (`TESSERAWALL_UPDATE_API`) with browser opening replaced by a log line (`TESSERAWALL_NO_BROWSER=1`).
 - Release checklist: run `update-mpv.ps1 -CheckOnly`; check for newer stable yt-dlp and Deno releases
   and, if worth it, re-pin them in `build.ps1` (version and SHA-256; Deno's `licenses\deno-LICENSE.md`
-  from the same tag); run the full test suite; build the installer;
+  from the same tag); run the full test suite; build the installer; run `tests\sandbox\run.ps1` on it;
   commit and tag `v<VERSION>`; publish the GitHub release with the installer **and** the mpv archive
   from `downloads\` attached (the build project deletes old releases, and the archive is the shipped
   build's source pointer for the GPL notice).
@@ -353,6 +353,17 @@ folder on the development PC still has the old name; nothing depends on it.
   a worker thread reads the clipboard through Win32 (`winapi.read_clipboard`: CF_HDROP for files copied
   in Explorer, else CF_UNICODETEXT) and lists any folders; the Tk thread polls for the result and gives
   up after 5 s with "not answering".
+  Fresh Windows and certificates (found with tests\sandbox): Windows only downloads most root
+  certificates when its own networking first needs one (Edge triggers that; Chrome and Firefox keep their
+  own lists). Python's OpenSSL and mpv's curl both read the store but never trigger the download, so on a
+  fresh PC the update check failed ("unable to get local issuer certificate") and YouTube's video servers
+  failed in mpv ("TLS certificate verification failed"; the stream then ends at once at its full length).
+  Fixes: `updates.tls_context` verifies through Windows itself (truststore, pinned in
+  requirements-build.txt; build.ps1 insists on it), and `ytdlp.warm_tls` does one such handshake per host a
+  link needs (`warm_hosts`: the link's own host plus googlevideo / ttvnw for YouTube / Twitch), started when
+  a link's player starts and done again before a retry. `Wall.link_stalled` catches a link that jumps to
+  the end of a long video within 30 s and sends it through `open_failed`; its first retry always goes ahead
+  (warm-up, then update check, then the best yt-dlp). `tests\sandbox\tls_experiment.ps1` shows the effect.
   Verified: Mux and Apple HLS test streams; YouTube at 1080p60 with Deno (extraction ~0.6-1.3 s slower
   than without, warning gone); live Twitch (LofiGirl, on air around the clock: a dependable test channel);
   a real update from 2026.10.21 to 2026.10.26 in 3.8 s with the shipped copy untouched.
@@ -449,6 +460,9 @@ python tests/phase2_test.py     # speed, frame step, A-B loop, tracks, snapshot,
 python tests/phase3_test.py     # memory guard, Tab focus, sync, Ctrl+S save, saved-wall button
 python tests/phase4_test.py     # templates: CLI, Best fit, chooser, N within shape, short folder, when finished
 python tests/controls_test.py   # 1-9, + / -, Ctrl+B blackout (screen pixels), Ctrl+G offsets
+powershell -ExecutionPolicy Bypass -File tests\sandbox\run.ps1   # clean PC in Windows Sandbox (~3 min, opens a
+                                # Sandbox window; this PC is not changed): install, a wall with a file, a clip and
+                                # YouTube, first yt-dlp update, update check, uninstall. Report: build\sandbox\out\
 python tests/magnify_test.py    # Ctrl+wheel, drag and Z on a four-colour clip, checked by screen pixels
 python tests/streams_test.py    # NEEDS INTERNET + build.ps1 first (packaged app): HLS, YouTube, live Twitch,
                                 # Ctrl+V paste (uses the clipboard), recovery from a broken updated yt-dlp

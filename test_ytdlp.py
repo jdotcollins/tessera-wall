@@ -81,6 +81,17 @@ class FakeYtdlp:
         C.app_dir, C.UPDATE_CHECK, C.YTDLP_PATH, Y.run, Y._state_dir = self.saved
 
 
+def test_warm_hosts():
+    """Which HTTPS hosts get a Windows-checked handshake before a link plays (fresh-PC root certificates)."""
+    assert Y.warm_hosts("https://www.youtube.com/watch?v=x") == ["www.youtube.com", "redirector.googlevideo.com"]
+    assert Y.warm_hosts("https://m.youtube.com/watch?v=x")[1:] == ["redirector.googlevideo.com"]
+    assert Y.warm_hosts("https://youtu.be/x") == ["youtu.be", "www.youtube.com", "redirector.googlevideo.com"]
+    assert Y.warm_hosts("https://www.twitch.tv/lofigirl") == ["www.twitch.tv", "usher.ttvnw.net"]
+    assert Y.warm_hosts("https://cdn.example.com:8443/a.m3u8") == ["cdn.example.com"]
+    assert Y.warm_hosts("https://notyoutube.com/x") == ["notyoutube.com"], "only the site itself or its subdomains"
+    assert Y.warm_hosts("http://a.b/c") == [] and Y.warm_hosts("rtmp://a/b") == [] and Y.warm_hosts(r"C:\a.mp4") == []
+
+
 def test_versions():
     assert Y.parse_version("2026.10.26") == (2026, 10, 26)
     assert Y.parse_version("2026.11.03.233012") > Y.parse_version("2026.11.03")

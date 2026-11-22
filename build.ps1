@@ -4,6 +4,7 @@ Builds the standalone Tessera Wall app and its Windows installer.
   powershell -ExecutionPolicy Bypass -File build.ps1 [-SkipInstaller] [-MpvDir C:\path\to\mpv]
 
 Needs:  pip install pyinstaller tkinterdnd2      (app bundle)
+        python -m pip install --require-hashes -r requirements-build.txt   (truststore; checked below)
         Inno Setup 6, with ISCC.exe on PATH or in its default folder   (installer)
         Internet access on the first build (to fetch the pinned mpv; cached in downloads\ after that)
 
@@ -44,6 +45,9 @@ $version = (Get-Content VERSION -Raw).Trim()
 
 python -m PyInstaller --version | Out-Null
 if ($LASTEXITCODE -ne 0) { throw "PyInstaller is not installed. Run: pip install pyinstaller" }
+# Without truststore the packaged app's update check fails on a fresh Windows (updates.tls_context).
+python -c "import truststore" 2>$null
+if ($LASTEXITCODE -ne 0) { throw "truststore is not installed. Run: python -m pip install --require-hashes -r requirements-build.txt" }
 
 # 1. app bundle (one folder; --windowed = no console window)
 python -m PyInstaller --noconfirm --clean --windowed --name TesseraWall `

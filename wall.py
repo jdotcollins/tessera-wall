@@ -133,6 +133,7 @@ class Tile:
     size: tuple | None = None    # video width, height once known (for the memory estimate)
     switch_due: float | None = None   # when "move on" replaces this video (None: not timed)
     mag: float = 0.0             # magnification inside the video (mpv video-zoom, log2; 0 = normal)
+    opened_at: float = 0.0       # position it was opened at (session / crash restart), for link_stalled
     pan: tuple = (0.0, 0.0)      # mpv video-pan-x / -y while magnified
 
 
@@ -249,7 +250,7 @@ class Wall:
             frame.destroy()
             return
         proc, pipe = started
-        self.tiles.append(Tile(path, frame, proc, pipe, time.monotonic()))
+        self.tiles.append(Tile(path, frame, proc, pipe, time.monotonic(), opened_at=start or 0.0))
         self.schedule_switch(self.tiles[-1])
         self.need_layout = True
         log.info("tile added #%d pipe=%s path=%s", self.counter, pipe, path)
@@ -290,6 +291,7 @@ class Wall:
                 self.link_tried.setdefault(path, []).append(exe)
             log.info("link uses yt-dlp %s", exe)
             args += ytdlp.mpv_args(path, exe)
+            ytdlp.warm_in_background(path)        # Windows fetches any missing root certificate meanwhile
         args += list(C.EXTRA_MPV_ARGS) + ["--", path]
         try:
             proc = subprocess.Popen(args, creationflags=subprocess.CREATE_NO_WINDOW, env=ytdlp.mpv_env(path))
@@ -313,7 +315,7 @@ class Wall:
         if not started:
             return False
         t.proc, t.pipe = started
-        t.ipc, t.born, t.restarts = None, now, t.restarts + [now]
+        t.ipc, t.born, t.restarts, t.opened_at = None, now, t.restarts + [now], pos
         t.panscan = t.dim = t.skip = None              # resend to the new player
         t.gain = 0.0                                   # starts muted; the crossfade brings sound back
         self.need_layout = True
@@ -945,19 +947,33 @@ class Wall:
         self.link_checked.add(path)
         self.retrying += 1
         target = next((t for t in self.tiles if t.ipc and t.path != path), None)
-        if target and check and ytdlp.updates_allowed():
-            target.ipc.post("show-text", "A link didn't open. Checking for a newer yt-dlp…", 4000)
+        if target and check:
+            target.ipc.post("show-text", "A link didn't open. Trying again…", 4000)
 
         def work():
             exe = None
             try:
-                if check and ytdlp.recover():
-                    exe = ytdlp.find()                   # updated: try the new version first
+                if check:
+                    ytdlp.warm_tls(path)                 # a missing root certificate is the commonest cause
+                    ytdlp.recover()                      # then a newer yt-dlp, if there is one
+                    exe = ytdlp.find()                   # first retry: the best yt-dlp, whatever was tried
                 exe = exe or next((c for c in ytdlp.candidates() if c not in tried), None)
             except Exception as e:                       # never leave the retry count raised
                 log.warning("link retry: %s", e)
             self.link_retries.put((path, exe))
         threading.Thread(target=work, daemon=True, name="link retry").start()
+
+    def link_stalled(self, t: Tile, now: float) -> bool:
+        """A link whose stream could not be read: mpv puts it at its end at once (seen when HTTPS
+        verification failed), leaving a black tile. Only within the first 30 s, and only when the position is
+        nearer the end than playing from where it was opened could have got it. Live streams have no length."""
+        age = now - t.born
+        if age < 6 or age > 30:
+            return False
+        dur, pos = t.ipc.value("duration"), t.ipc.value("time-pos")
+        if not dur or pos is None or dur < 60:
+            return False
+        return pos >= dur - 1 and pos - t.opened_at > age + 10
 
     def take_link_retries(self):
         """On the Tk thread: open again the links open_failed prepared, or report them."""
@@ -1139,6 +1155,9 @@ class Wall:
                 except OSError:
                     if now - t.born > CONNECT_TIMEOUT:
                         self.remove(t, "no IPC connection")
+            elif "://" in t.path and t.aspect_known and self.link_stalled(t, now):
+                self.open_failed(t.path)
+                self.remove(t, "the link ended without playing")
             elif t.aspect_known and self.end_mode != "loop" and t.ipc.value("eof-reached") \
                     and t.ipc.value_seq("eof-reached") > t.swap_seq:
                 self.advance(t)          # it ended (keep-open paused it on its last frame): next / random file

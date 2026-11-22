@@ -153,6 +153,62 @@ def mpv_env(item: str) -> dict | None:
     return dict(os.environ, DENO_DIR=os.path.join(state_dir(), "deno"), DENO_NO_UPDATE_CHECK="1")
 
 
+# ---- certificates for web links -----------------------------------------------------------------------
+# mpv's curl checks HTTPS against Windows' certificate store, and a fresh Windows only downloads most root
+# certificates the first time Windows' own networking needs one (Edge does that; Chrome and Firefox use
+# their own lists and do not). Until then YouTube's video servers fail with "TLS certificate verification
+# failed" (seen in Windows Sandbox). One HTTPS handshake checked by Windows itself (truststore, via
+# updates.tls_context) makes it fetch the root, after which mpv works. For sites whose video comes from
+# other servers, those are warmed too.
+WARM_EXTRA = {
+    "youtube.com": ["redirector.googlevideo.com"], "youtu.be": ["www.youtube.com", "redirector.googlevideo.com"],
+    "twitch.tv": ["usher.ttvnw.net"],
+}
+_warmed: set[str] = set()
+_warm_lock = threading.Lock()
+
+
+def warm_hosts(link: str) -> list[str]:
+    """The HTTPS hosts whose certificates a link will need: its own, plus its site's video servers."""
+    m = re.match(r"^https://([^/:?#]+)", link or "", re.IGNORECASE)
+    if not m:
+        return []
+    host = m.group(1).lower()
+    extra = next((v for k, v in WARM_EXTRA.items() if host == k or host.endswith("." + k)), [])
+    return list(dict.fromkeys([host] + extra))
+
+
+def warm_tls(link: str, timeout: float = 5.0) -> int:
+    """Blocking: one Windows-checked TLS handshake per host the link needs (each host once per run).
+    Returns how many hosts were checked now. Does nothing without truststore (running from source)."""
+    import socket
+    import updates
+    ctx = updates.tls_context()
+    if ctx is None:
+        return 0
+    done = 0
+    for host in warm_hosts(link):
+        with _warm_lock:
+            if host in _warmed:
+                continue
+            _warmed.add(host)
+        try:
+            with socket.create_connection((host, 443), timeout=timeout) as raw:
+                with ctx.wrap_socket(raw, server_hostname=host):
+                    pass
+            done += 1
+        except Exception as e:                      # offline, blocked, or a real certificate problem
+            log.info("certificate warm-up for %s: %s", host, e)
+            with _warm_lock:
+                _warmed.discard(host)              # try again next time
+    return done
+
+
+def warm_in_background(link: str):
+    if warm_hosts(link):
+        threading.Thread(target=warm_tls, args=(link,), daemon=True, name="tls warm-up").start()
+
+
 def links_from_text(text: str) -> list[str]:
     """Links and existing file/folder paths in pasted or dropped text, in order, one per line or separated
     by spaces. Quotes and angle brackets around an item are removed; anything else is ignored."""

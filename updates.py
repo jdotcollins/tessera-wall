@@ -54,12 +54,26 @@ def release_page_ok(url: str, repo: str) -> bool:
     return isinstance(url, str) and url.lower().startswith(f"https://github.com/{repo.lower()}/releases/")
 
 
+def tls_context():
+    """HTTPS checked by Windows itself (truststore), not by Python's OpenSSL reading the certificate store.
+    A fresh Windows only downloads most root certificates the first time its own networking needs one, so
+    OpenSSL finds GitHub's missing there and the check failed ("unable to get local issuer certificate",
+    seen in Windows Sandbox). Windows' own verification fetches it, and honours certificates a company
+    installs. None (Python's default) when truststore is not installed, e.g. running from source."""
+    try:
+        import ssl
+        import truststore
+        return truststore.SSLContext(ssl.PROTOCOL_TLS_CLIENT)
+    except Exception:
+        return None
+
+
 def fetch_latest(repo: str, timeout: float = 5.0) -> tuple[str, str]:
     """(tag, release page URL) of the latest non-pre-release. Raises on any problem."""
     url = os.environ.get("TESSERAWALL_UPDATE_API") or f"https://api.github.com/repos/{repo}/releases/latest"
     req = urllib.request.Request(url, headers={"User-Agent": f"TesseraWall/{current_version()}",
                                                "Accept": "application/vnd.github+json"})
-    with urllib.request.urlopen(req, timeout=timeout) as r:
+    with urllib.request.urlopen(req, timeout=timeout, context=tls_context()) as r:
         data = json.loads(r.read(1 << 20).decode("utf-8"))
     tag, page = data.get("tag_name"), data.get("html_url")
     if not isinstance(tag, str) or not isinstance(page, str):
