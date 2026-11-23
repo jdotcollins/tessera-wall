@@ -20,6 +20,11 @@ def expand(args: list[str]) -> list[str]:
     for a in args:
         if "://" in a:
             out.append(a)
+        elif a.lower().startswith("ytsearch"):           # yt-dlp's spelling of a search: a search source
+            import sources
+            link = sources.from_search_text(a)
+            if link:
+                out.append(link)
         elif os.path.isdir(a):
             for name in sorted(os.listdir(a), key=str.lower):
                 full = os.path.join(a, name)

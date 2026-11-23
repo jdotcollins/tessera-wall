@@ -215,11 +215,13 @@ class Wall:
         self.retrying = 0
         # Link sources (sources.py): each source's videos, which source a video came from, video titles,
         # lists still being fetched, and videos picked but not yet opened (they start two at a time).
+        # Videos already shown from a source are picked again only once all the others have been.
         self.pools: dict[str, list] = {}
+        self.seen: set[str] = set()
         self.pool_of: dict[str, str] = {}
         self.title_of: dict[str, str] = {}
         self.pool_results: queue.Queue = queue.Queue()
-        self.listing: set[str] = set()
+        self.listing: dict[str, int] = {}          # source -> how many videos it will open once listed
         self.pending_links = 0
         self.status: tk.Label | None = None
         self.prepared: queue.Queue = queue.Queue()        # (tile, url, how, resolve result) from workers
@@ -321,8 +323,9 @@ class Wall:
             exe = self.link_next.pop(path, None) or ytdlp.find()
             if exe:
                 self.link_tried.setdefault(path, []).append(exe)
-            # Every video on its way counts: picked from a source, or still queued (a session reopening).
-            coming = len(self.tiles) + 1 + self.pending_links + self.incoming.qsize()
+            # Every video on its way counts: picked from a source, still queued (a session reopening), or
+            # to come from a source still being listed (a search and a channel opened together).
+            coming = len(self.tiles) + 1 + self.pending_links + self.incoming.qsize() + sum(self.listing.values())
             height = sources.height_for(coming, self.H, C.STREAM_MAX_HEIGHT)
             log.info("link uses yt-dlp %s, up to %dp", exe, height)
             args += ytdlp.mpv_args(path, exe, height)
@@ -691,10 +694,11 @@ class Wall:
         if t.pool:
             entries = self.pools.get(t.pool) or []
             taken = {x.path for x in self.tiles}
-            e = (sources.pick(entries, 1, taken) or [None])[0] if how == "random" else \
-                sources.step(entries, t.path, 1 if how == "next" else -1, taken)
+            e = (sources.pick(entries, 1, taken, C.SOURCE_ORDER, self.seen) or [None])[0] if how == "random" \
+                else sources.step(entries, t.path, 1 if how == "next" else -1, taken)
             if e:
                 self.pool_of[e["url"]] = t.pool
+                self.seen.add(e["url"])
             return e["url"] if e else None
         if "://" in t.path:
             return None
@@ -867,6 +871,7 @@ class Wall:
         if announce:
             t.ipc.post("show-text", self.title_of.get(new) or os.path.basename(new), 2500)
         t.path, t.swapped, t.aspect_known, t.born = new, True, False, time.monotonic()
+        t.opened_at = 0.0                            # a link starts at 0 (start= above), for link_stalled
         self.bar_next = 0.0
 
     def toggle_help(self):
@@ -984,6 +989,7 @@ class Wall:
 
         button("add", "Add videos…", lambda: self.add_from_dialog(folder=False))
         button("folder", "Add a folder…", lambda: self.add_from_dialog(folder=True))
+        button("search", "Search YouTube…", self.search_from_dialog)
         button("controls", "Controls", lambda: (self.hide_topbar(), self.toggle_help()))
         button("save", "Save wall\u2026", lambda: (self.hide_topbar(), self.save_wall_as()))
         button("settings", "Settings", lambda: (self.hide_topbar(), self.toggle_settings()))
@@ -1022,6 +1028,18 @@ class Wall:
             self.dialog_open = False
         for p in expand(picked):
             self.incoming.put(p)
+        self.hide_topbar()
+
+    def search_from_dialog(self):
+        """Top bar: open videos from a YouTube search, like a channel link (sources.py)."""
+        self.dialog_open = True
+        try:
+            words = simpledialog.askstring("Search YouTube", "Search YouTube for:", parent=self.topbar)
+        finally:
+            self.dialog_open = False
+        if words and words.strip():
+            log.info("search typed")
+            self.incoming.put(sources.search_url(words))
         self.hide_topbar()
 
     # ---- files that would not play --------------------------------------------
@@ -1063,19 +1081,20 @@ class Wall:
         return bool(self.retrying or self.listing or self.pending_links)
 
     def open_source(self, source: str, n: int):
-        """List a source in a worker thread (cached for a day), then open n random videos from it (0: just
-        make it available, for videos reopened from a session)."""
+        """List a source in a worker thread (cached for a day, an hour in "newest" order), then open n videos
+        from it (0: just make it available, for videos reopened from a session)."""
         if source in self.pools:
             self.pool_results.put((source, self.pools[source], None, n))
             return
-        self.listing.add(source)
+        self.listing[source] = n
         log.info("listing %s for %d videos", source, n)
         if n:
             self.say_status(f"Getting videos from {sources.label(source)}…")
 
         def work():
             try:
-                self.pool_results.put((source, sources.load(source), None, n))
+                fresh = sources.FRESH_AGE if C.SOURCE_ORDER == "newest" else sources.MAX_AGE
+                self.pool_results.put((source, sources.load(source, max_age=fresh), None, n))
             except Exception as e:
                 log.warning("could not list %s: %s", source, e)
                 self.pool_results.put((source, None, str(e), n))
@@ -1089,7 +1108,7 @@ class Wall:
                 source, entries, error, n = self.pool_results.get_nowait()
             except queue.Empty:
                 return
-            self.listing.discard(source)
+            self.listing.pop(source, None)
             if entries is None:
                 if n:
                     self.failed.append(source)
@@ -1098,7 +1117,8 @@ class Wall:
                 continue
             self.pools[source] = entries
             self.title_of.update({e["url"]: e["title"] for e in entries})
-            picked = sources.pick(entries, n, {t.path for t in self.tiles})
+            picked = sources.pick(entries, n, {t.path for t in self.tiles}, C.SOURCE_ORDER, self.seen)
+            self.seen.update(e["url"] for e in picked)
             log.info("%s: opening %d of %d videos", source, len(picked), len(entries))
             for i, e in enumerate(picked):
                 self.pool_of[e["url"]] = source
@@ -1127,7 +1147,7 @@ class Wall:
             if not url:
                 continue
             t.preparing = True
-            coming = len(self.tiles) + self.pending_links + self.incoming.qsize()
+            coming = len(self.tiles) + self.pending_links + self.incoming.qsize() + sum(self.listing.values())
             height = sources.height_for(coming, self.H, C.STREAM_MAX_HEIGHT)
 
             def work(t=t, url=url, how=how, height=height):
@@ -1197,10 +1217,14 @@ class Wall:
 
     def link_stalled(self, t: Tile, now: float) -> bool:
         """A link whose stream could not be read: mpv puts it at its end at once (seen when HTTPS
-        verification failed), leaving a black tile. Only within the first 30 s, and only when the position is
-        nearer the end than playing from where it was opened could have got it. Live streams have no length."""
+        verification failed, and now and then when YouTube answers a stream request with nothing), leaving a
+        black tile. Only within the first 30 s, and only when the position is nearer the end than playing
+        from where it was opened could have got it. Live streams have no length. Checked from 6 s on, or as
+        soon as mpv reports the end, so a channel video that fails at once is retried instead of being taken
+        for one that finished (which would skip it, and with a lasting failure race through the channel)."""
         age = now - t.born
-        if age < 6 or age > 30:
+        ended = t.ipc.value("eof-reached") and t.ipc.value_seq("eof-reached") > t.swap_seq
+        if (age < 6 and not ended) or age > 30:
             return False
         dur, pos = t.ipc.value("duration"), t.ipc.value("time-pos")
         if not dur or pos is None or dur < 60:

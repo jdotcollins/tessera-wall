@@ -347,11 +347,16 @@ folder on the development PC still has the old name; nothing depends on it.
   updated, never with `update_check = false` or `ytdlp_path`. The uninstaller removes the own copy,
   `deno\` and `ytdlp.json`.
 - Link sources (`sources.py`): `source_of` recognises a YouTube channel (bare = its Videos tab), a tab
-  (videos / shorts / streams) or a playlist; single videos (watch?v=, even with &list=, shorts/ID,
-  youtu.be) are not sources. `Wall.add` hands a source to `open_source`, which lists it in a worker thread
+  (videos / shorts / streams), a playlist or a search; single videos (watch?v=, even with &list=, shorts/ID,
+  youtu.be) are not sources. A search is kept as its results link (`search_url`; filters such as &sp= are
+  dropped) and comes from a pasted results link, "ytsearch:words" (`links_from_text` keeps the whole
+  line, `expand` converts it, so the command line works too) or *Search YouTube…* (start window,
+  `Wall.search_from_dialog`); `load` lists it as `ytsearch100:words` (99 results in 4.7 s, measured). `Wall.add` hands a source to `open_source`, which lists it in a worker thread
   with yt-dlp's flat mode (`--flat-playlist --playlist-items 1:500`, no format lookups: NASA's Shorts tab
   ~2 s, a 5,500-video Videos tab ~50 s for all of it) and caches the list for a day in the state folder
-  (`pools\`). `take_pool_results` picks `source_count` random entries not on the wall and opens them two
+  (`pools\`; an hour with `source_order = "newest"`). `take_pool_results` picks `source_count` entries
+  not on the wall (`sources.pick`: random, or the first in the source's order with "newest"; entries in
+  `Wall.seen`, shown before this run, only once the rest are used up) and opens them two
   at a time, 0.8 s apart (`pending_links`; YouTube may answer bursts with "confirm you're not a bot").
   Each tile keeps `pool`; `pick_file` then picks from the source (random / next / prev), so N, +,
   Page Down/Up, Move on and when-finished work as with folders. Sessions and saved walls store `pool`

@@ -62,7 +62,7 @@ start of a stream may play at a higher quality before the stream itself begins. 
 
 **Channels, Shorts and playlists.** Give a YouTube channel, one of its tabs or a playlist instead of a
 single video, for example `https://www.youtube.com/@NASA/shorts`, and the wall opens 6 random videos from
-it (*Videos from a channel or playlist link* in Settings). From then on that channel works like a folder:
+it (*Videos from a channel, playlist or search* in Settings). From then on that channel works like a folder:
 **N** swaps a video for another from it, **+** adds one more, **Page Down**/**Page Up** step through it in
 order, and *Move on* keeps picking from it. When one of its videos ends, another from it takes its place,
 so a Shorts tab becomes an endless wall of that creator's Shorts (*When a channel or playlist video ends*
@@ -70,7 +70,21 @@ in Settings, or **E** while pointing at one, changes that to the next in order o
 While a video plays, Tessera Wall looks up the one that will follow it, so the switch takes about half a
 second instead of several, and the tile fades through black rather than freezing on the last frame. A channel link on its own means its Videos tab. The newest
 500 videos are listed, which takes a few seconds for a big channel, and the list is remembered for a
-day. To keep data use down, each video asks for a quality that suits its share of the screen (720p with
+day.
+
+**Searches.** A YouTube search works the same way: choose *Search YouTube…* in the start window or the
+menu bar and type what you want, or paste a YouTube results link
+(`https://www.youtube.com/results?search_query=…`). The first 100 results are listed, in about five
+seconds, and the wall opens 6 of them. On the command line, `TesseraWall.exe "ytsearch:lofi hip hop"`
+does the same.
+
+**Random or newest.** *Which ones* in Settings picks videos from a channel, playlist or search at random
+(the default) or *Newest first*: a channel's latest uploads, a playlist from the top, a search's best
+matches. Either way, a video that has already been on the wall comes back only once all the others have
+been, and N, *Move on* and the endless feed work down the list. With *Newest first* a channel's list is
+fetched again after an hour instead of a day.
+
+To keep data use down, each video asks for a quality that suits its share of the screen (720p with
 six on a 1440p monitor), never above `stream_max_height`.
 
 Live streams work while the channel is live. Sites change often and sometimes break playback for a while,
@@ -139,7 +153,8 @@ the mouse still work, and **I** brings it all back. Each of those can also be sw
 Settings, under *On screen*, where *Clean mode* makes every wall open that way.
 
 Press **H** in the wall for the list of controls, or rest the pointer on the top edge of the screen
-for a small menu bar with *Add videos*, *Add a folder*, *Controls*, *Save wall…*, *Settings* and *Close*.
+for a small menu bar with *Add videos*, *Add a folder*, *Search YouTube…*, *Controls*, *Save wall…*,
+*Settings* and *Close*.
 
 A wall holds up to 24 videos. Before opening each one, Tessera Wall estimates whether your graphics card
 and free memory have room for it; videos that would not fit are left out and the wall says so, instead

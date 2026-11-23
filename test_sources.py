@@ -1,6 +1,7 @@
 """Run with: python test_sources.py   (no pytest, no network, no mpv; exits non-zero on failure)
-Covers sources.py: which links are channels / playlists, reading yt-dlp's listing, picking, the cache, and
-the stream quality per video count."""
+Covers sources.py: which links are channels / playlists / searches, reading yt-dlp's listing, picking (at
+random or newest first, passing over videos already shown), the cache, and the stream quality per video
+count."""
 import json
 import os
 import tempfile
@@ -23,15 +24,47 @@ def test_source_of():
     assert S.label("https://www.youtube.com/playlist?list=x") == "the playlist"
 
 
+def test_search():
+    lofi = "https://www.youtube.com/results?search_query=lofi+hip+hop"
+    assert S.source_of("https://www.youtube.com/results?search_query=lofi+hip+hop&sp=EgIQAQ%3D%3D") == lofi
+    assert S.source_of("https://m.youtube.com/results?search_query=lofi%20%20hip+hop") == lofi
+    assert S.source_of("ytsearch:lofi hip hop") == lofi and S.source_of("YTSEARCH50:  lofi   hip hop ") == lofi
+    assert S.source_of("https://www.youtube.com/results?search_query=") is None
+    assert S.source_of("ytsearch:") is None and S.from_search_text("lofi") is None
+    assert S.query_of(S.search_url("rock & roll 100%")) == "rock & roll 100%"
+    assert S.query_of("https://www.youtube.com/@NASA/videos") is None
+    assert S.label(lofi) == "the search \u201clofi hip hop\u201d"
+    assert S.label(S.search_url("x" * 60)) == "the search \u201c" + "x" * 39 + "\u2026\u201d"
+
+
+def test_search_is_listed_with_ytsearch():
+    saved_dir, saved_run, saved_find = Y._state_dir, Y.run, Y.find
+    calls = []
+    Y.init(tempfile.mkdtemp(prefix="tesserawall-search-"))
+    Y.find = lambda: "yt-dlp.exe"
+    Y.run = lambda args, timeout, env=None: (calls.append(args), (0, "abcdefghijk\tNA\t60\tNA\tA video\n"))[1]
+    try:
+        got = S.load(S.search_url("lofi  hip hop"))
+        assert [e["url"] for e in got] == ["https://www.youtube.com/watch?v=abcdefghijk"]
+        assert calls[0][-1] == "ytsearch100:lofi hip hop" and "1:100" in calls[0], calls[0]
+        S.load("https://www.youtube.com/@Test/videos")
+        assert calls[1][-1] == "https://www.youtube.com/@Test/videos" and "1:500" in calls[1]
+    finally:
+        Y._state_dir, Y.run, Y.find = saved_dir, saved_run, saved_find
+
+
 def test_parse_listing():
-    text = ("k5Z7sFwFF7Q\thttps://www.youtube.com/shorts/k5Z7sFwFF7Q\tNA\tBecome a NASA Astronaut!\n"
+    text = ("k5Z7sFwFF7Q\thttps://www.youtube.com/shorts/k5Z7sFwFF7Q\tNA\tNA\tBecome a NASA Astronaut!\n"
             "WARNING: something\n"
-            "abcdefghijk\tNA\t64.0\tA title\twith a tab\n"
-            "k5Z7sFwFF7Q\thttps://www.youtube.com/shorts/k5Z7sFwFF7Q\tNA\tduplicate\n"
-            "zzzzzzzzzzz\tNA\tNA\t[Private video]\n")
+            "abcdefghijk\tNA\t64.0\tNA\tA title\twith a tab\n"
+            "k5Z7sFwFF7Q\thttps://www.youtube.com/shorts/k5Z7sFwFF7Q\tNA\tNA\tduplicate\n"
+            "zzzzzzzzzzz\tNA\tNA\tNA\t[Private video]\n"
+            "upcomingvid\tNA\tNA\tis_upcoming\tPremieres tomorrow\n"
+            "livenow1234\tNA\tNA\tis_live\tOn air\n")
     got = S.parse_listing(text)
     assert [e["url"] for e in got] == ["https://www.youtube.com/shorts/k5Z7sFwFF7Q",
-                                       "https://www.youtube.com/watch?v=abcdefghijk"], got
+                                       "https://www.youtube.com/watch?v=abcdefghijk",
+                                       "https://www.youtube.com/watch?v=livenow1234"], "upcoming ones dropped"
     assert got[0]["duration"] is None and got[1]["duration"] == 64.0 and got[1]["title"] == "A title\twith a tab"
     assert S.is_short(got[0]["url"]) and not S.is_short(got[1]["url"])
 
@@ -44,6 +77,20 @@ def test_pick_and_step():
     assert S.step(entries, "u1", 1)["url"] == "u2" and S.step(entries, "u4", 1)["url"] == "u0"
     assert S.step(entries, "u0", -1, {"u4"})["url"] == "u3", "wraps, skipping what is on the wall"
     assert S.step(entries, "other", 1)["url"] == "u0" and S.step([], "u0", 1) is None
+
+
+def test_pick_order_and_seen():
+    entries = [{"url": f"u{i}", "title": str(i), "duration": 1} for i in range(6)]
+    assert [e["url"] for e in S.pick(entries, 3, order="newest")] == ["u0", "u1", "u2"]
+    assert [e["url"] for e in S.pick(entries, 2, {"u0"}, "newest", {"u1"})] == ["u2", "u3"], \
+        "newest first, skipping what is on the wall and what was shown"
+    assert [e["url"] for e in S.pick(entries, 3, {"u5"}, "newest", {"u0", "u1", "u2", "u3"})] == ["u4", "u0", "u1"], \
+        "once the unseen run out, shown ones come back, in order"
+    for _ in range(20):
+        got = {e["url"] for e in S.pick(entries, 2, {"u0"}, "random", {"u1", "u2", "u3"})}
+        assert got == {"u4", "u5"}, "random also prefers videos not shown yet"
+    got = S.pick(entries, 4, set(), "random", {"u0", "u1", "u2", "u3"})
+    assert len(got) == 4 and {"u4", "u5"} <= {e["url"] for e in got}
 
 
 def test_cache():
@@ -60,6 +107,9 @@ def test_cache():
         with open(S.cache_path(src), "w") as f:
             json.dump({"source": src, "fetched": time.time() - S.MAX_AGE - 1, "entries": []}, f)
         assert S.cached(src) is None, "older than a day"
+        with open(S.cache_path(src), "w") as f:
+            json.dump({"source": src, "fetched": time.time() - S.FRESH_AGE - 1, "entries": [{"url": "u"}]}, f)
+        assert S.cached(src) == [{"url": "u"}] and S.cached(src, S.FRESH_AGE) is None, "newest order: an hour"
     finally:
         Y._state_dir = saved
 

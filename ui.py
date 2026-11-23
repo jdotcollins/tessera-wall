@@ -174,7 +174,8 @@ SETTINGS_UI = [
     ("check", "RANDOM_START", "Start videos at a random point"),
     ("choice", "SOURCE_WHEN_FINISHED", "When a channel or playlist video ends",
      [("random", "Another from it"), ("next", "The next in it"), ("loop", "Play it again")]),
-    ("scale", "SOURCE_COUNT", "Videos from a channel or playlist link", 1, 24, 1, "{}"),
+    ("scale", "SOURCE_COUNT", "Videos from a channel, playlist or search", 1, 24, 1, "{}"),
+    ("choice", "SOURCE_ORDER", "Which ones", [("random", "At random"), ("newest", "Newest first")]),
     ("section", "On screen"),
     ("check", "FOCUS_OUTLINE", "Outline the video you point at"),
     ("check", "SEEKBAR_HEIGHT", "Progress line and time on the video you point at", 6, 0),
@@ -422,6 +423,13 @@ def start_window(last_session: list, incoming: queue.Queue, checker: "updates.Ch
         else:
             status.config(text="No videos found in that selection.")
 
+    def search():
+        from tkinter import simpledialog
+        words = simpledialog.askstring("Search YouTube", "Search YouTube for:", parent=root)
+        if words and words.strip():
+            import sources
+            finish([sources.search_url(words)])
+
     def pick_files():
         patterns = " ".join("*" + e for e in sorted(C.VIDEO_EXTS))
         files = filedialog.askopenfilenames(parent=root, title="Choose videos",
@@ -487,6 +495,7 @@ def start_window(last_session: list, incoming: queue.Queue, checker: "updates.Ch
 
     button("videos", "Choose videos…", pick_files, primary=True).focus_set()
     button("folder", "Choose a folder…", pick_folder)
+    button("search", "Search YouTube…", search)
     button("template", "Use a template…", pick_template)
     if last_session:
         n = len(last_session)

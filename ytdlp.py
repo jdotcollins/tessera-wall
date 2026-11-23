@@ -228,6 +228,9 @@ def links_from_text(text: str) -> list[str]:
         if os.path.exists(line):                       # a path with spaces in it, on its own line
             out.append(line)
             continue
+        if re.match(r"ytsearch\d*:\s*\S", line, re.IGNORECASE):   # a search ("ytsearch:words"), the whole line
+            out.append(line)
+            continue
         for token in line.split():
             token = token.strip('"\'<>')
             if URL.match(token):

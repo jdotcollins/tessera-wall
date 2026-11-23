@@ -22,6 +22,8 @@ def test_links_from_text():
     assert got == ["https://www.youtube.com/watch?v=aqz-KE-bpKQ", "https://example.com/live.m3u8",
                    spaced, "rtmp://host/app/key"], got
     assert Y.links_from_text("") == [] and Y.links_from_text(None) == []
+    assert Y.links_from_text("ytsearch:lofi hip hop\nytsearch10: cats") == ["ytsearch:lofi hip hop",
+                                                                           "ytsearch10: cats"], "a search line"
 
 
 def test_mpv_args():
