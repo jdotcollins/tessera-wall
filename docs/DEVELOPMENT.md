@@ -178,14 +178,18 @@ folder on the development PC still has the old name; nothing depends on it.
 - Installer checked 2026-11-12 on the development PC (silent install, upgrade over an existing
   install, shortcuts, Send To targets, right-click on files and folders, uninstall leaves only the
   user's settings). Not yet tried on a clean PC or through the interactive wizard.
-- Settings window: `settings_window()` is built from the `SETTINGS_UI` table (sliders, choices,
-  checkboxes for about ten settings). Each change is written with `config.set_user_values()`, which
+- Settings window: `settings_window()` is built from the `SETTINGS_UI` table: two columns of cards
+  (a `("column",)` entry starts the second), each row a label with an optional grey hint on the left and
+  its control on the right: a slider, a segmented choice (radio buttons in one dark well) or an on/off
+  switch. Entries marked `"clean": True` are greyed while the Clean mode switch is on, because clean mode
+  overrides them. Each change is written with `config.set_user_values()`, which
   rewrites only that key's line in the user's file (the commented template line counts, so order and
-  descriptions survive) and never touches the user's other lines; "Reset these to defaults" comments
+  descriptions survive) and never touches the user's other lines; "Reset to defaults" comments
   the lines out again. In the wall, `Wall.apply_settings` then calls `reload_config(quiet=True)` and,
   for layout/crop, also switches the current mode, so the wall changes while the window is open.
-  Its widgets are removed from the app-wide bindtag `all`, so Space on a checkbox does not also pause
-  a video. The sliders are a small Canvas control because `tk.Scale` cannot colour its handle. Opened
+  Its widgets are removed from the app-wide bindtag `all`, so Space on a switch does not also pause
+  a video. Sliders and switches are small Canvas controls (`tk.Scale` cannot colour its handle); a
+  switch's whole row is clickable and its logged rectangle is the row. Opened
   with `S`, the menu bar, or the start window's link; `tests/settings_test.py` covers the wall route
   with real clicks. **The start-window route and "Open the settings file" are not tested.**
 - Menu bar: `Wall.update_topbar` shows a slim always-on-top `Toplevel` when the pointer rests on the top

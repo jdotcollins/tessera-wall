@@ -155,40 +155,48 @@ def make_root():
 
 
 # The settings window: the few settings worth a control, in plain words. Everything else stays in the
-# settings file. Kinds: ("section", title) | ("scale", NAME, label, low, high, step)
-#   | ("choice", NAME, label, [(value, text), ...]) | ("check", NAME, label)
-#   | ("check", NAME, label, value_when_on, value_when_off)
-# A scale's last item formats its value for display, e.g. "{} ms".
+# settings file. Two columns of cards; each entry is one of
+#   ("column",)                                      start the right-hand column
+#   ("section", title)                               a card with this heading
+#   ("scale", NAME, label, low, high, step, unit)    unit formats the value shown, e.g. "{} ms"
+#   ("choice", NAME, label, [(value, text), ...])
+#   ("check", NAME, label)  or  ("check", NAME, label, value_when_on, value_when_off)
+# followed, for the last three, by an optional dict: {"hint": grey line under the label,
+# "clean": True for what clean mode overrides (greyed while it is on)}.
 SETTINGS_UI = [
     ("section", "When you point at a video"),
-    ("scale", "FOCUS_SCALE", "How much it grows", 1.0, 2.5, 0.05, "{:.2f}\u00d7"),
-    ("scale", "DIM_UNFOCUSED", "How much the other videos dim", 0, 60, 1, "{} %"),
-    ("scale", "CROSSFADE_MS", "Sound fade between videos", 0, 1000, 10, "{} ms"),
+    ("scale", "FOCUS_SCALE", "How much it grows", 1.0, 2.5, 0.05, "{:.2f}×"),
+    ("scale", "DIM_UNFOCUSED", "Dim the others", 0, 60, 1, "{} %", {"clean": True}),
+    ("scale", "CROSSFADE_MS", "Sound fade", 0, 1000, 10, "{} ms", {"hint": "From one video's sound to the next"}),
     ("section", "Layout"),
     ("choice", "LAYOUT_MODE", "Arrangement", [("grow", "Grow on hover"), ("flat", "Best fit"), ("grid", "Even grid")]),
     ("choice", "CROP_MODE", "Black bars", [("limited", "Crop a little"), ("fill", "Crop to fill"), ("fit", "Never crop")]),
-    ("choice", "WHEN_FINISHED", "When a video ends", [("loop", "Play it again"), ("next", "Next in folder"),
-                                                      ("random", "Random from folder")]),
-    ("choice", "SWITCH_SECONDS", "Move on", [(0, "Never"), (30, "After 30 s"), (60, "After 1 min"),
-                                             (120, "After 2 min")]),
-    ("check", "RANDOM_START", "Start videos at a random point"),
-    ("choice", "SOURCE_WHEN_FINISHED", "When a channel or playlist video ends",
-     [("random", "Another from it"), ("next", "The next in it"), ("loop", "Play it again")]),
-    ("scale", "SOURCE_COUNT", "Videos from a channel, playlist or search", 1, 24, 1, "{}"),
-    ("choice", "SOURCE_ORDER", "Which ones", [("random", "At random"), ("newest", "Newest first")]),
-    ("section", "On screen"),
-    ("check", "FOCUS_OUTLINE", "Outline the video you point at"),
-    ("check", "SEEKBAR_HEIGHT", "Progress line and time on the video you point at", 6, 0),
-    ("check", "SEEKBAR_SHOW_NAME", "File name next to the time"),
-    ("check", "TOP_MENU", "Menu bar when the pointer rests on the top edge"),
-    ("check", "SHOW_MESSAGES", "Messages on the videos (volume, modes, errors)"),
-    ("check", "SHOW_HELP_HINT", "Controls hint when a wall opens"),
-    ("check", "CURSOR_HIDE_SECONDS", "Hide the pointer when it is not moving", 2.0, 0.0),
-    ("check", "CLEAN_MODE", "Clean mode: none of the above, just the videos (I in the wall)"),
+    ("section", "Playing"),
+    ("choice", "WHEN_FINISHED", "When a video ends", [("loop", "Play it again"), ("next", "Next"), ("random", "Random")],
+     {"hint": "Videos from files and folders"}),
+    ("choice", "SWITCH_SECONDS", "Move on", [(0, "Never"), (30, "30 s"), (60, "1 min"), (120, "2 min")],
+     {"hint": "Change a video after a while"}),
+    ("check", "RANDOM_START", "Start at a random point"),
     ("section", "Other"),
-    ("check", "UNFOCUSED_SKIP", "Save power: lower frame rate on the other videos (they look choppy)", "nonref", ""),
-    ("check", "UPDATE_CHECK", "Check for a new version once a week"),
-    ("check", "SAFE_RENDERING", "Compatibility mode (recommended; applies to videos opened next)"),
+    ("check", "UNFOCUSED_SKIP", "Save power", "nonref", "",
+     {"hint": "The other videos play at a lower, choppy frame rate"}),
+    ("check", "UPDATE_CHECK", "Check for a new version", {"hint": "Once a week"}),
+    ("check", "SAFE_RENDERING", "Compatibility mode", {"hint": "Recommended. Applies to videos opened after this"}),
+    ("column",),
+    ("section", "Channels, playlists and searches"),
+    ("scale", "SOURCE_COUNT", "Videos to open", 1, 24, 1, "{}", {"hint": "How many each one adds to the wall"}),
+    ("choice", "SOURCE_ORDER", "Which ones", [("random", "At random"), ("newest", "Newest first")]),
+    ("choice", "SOURCE_WHEN_FINISHED", "When one ends",
+     [("random", "Another"), ("next", "The next"), ("loop", "Play it again")]),
+    ("section", "On screen"),
+    ("check", "CLEAN_MODE", "Clean mode", {"hint": "Just the videos; overrides what it greys out. I in the wall"}),
+    ("check", "FOCUS_OUTLINE", "Outline", {"hint": "Around the video you point at", "clean": True}),
+    ("check", "SEEKBAR_HEIGHT", "Progress line and time", 6, 0, {"hint": "On the video you point at", "clean": True}),
+    ("check", "SEEKBAR_SHOW_NAME", "File name next to the time", {"clean": True}),
+    ("check", "TOP_MENU", "Menu bar", {"hint": "When the pointer rests on the top edge", "clean": True}),
+    ("check", "SHOW_MESSAGES", "Messages", {"hint": "Volume, modes and errors, on the videos", "clean": True}),
+    ("check", "SHOW_HELP_HINT", "Controls hint when a wall opens", {"clean": True}),
+    ("check", "CURSOR_HIDE_SECONDS", "Hide the pointer", 2.0, 0.0, {"hint": "When it isn't moving", "clean": True}),
 ]
 
 
@@ -200,15 +208,21 @@ def typed(name: str, value: str):
     return value
 
 
+def _split(item):
+    """An entry without its optional trailing options dict, and that dict."""
+    return (item[:-1], item[-1]) if isinstance(item[-1], dict) else (item, {})
+
+
 def settings_window(parent, config_path: str, apply, on_close, topmost: bool = False) -> tk.Toplevel:
     """Build and show the settings window. Each change is written to the settings file at once and
     `apply(names)` is called, so the wall behind it updates while the user watches.
 
     Its widgets are taken out of the app-wide key and mouse bindings (bindtag "all"): otherwise Space
-    on a checkbox would also pause a video, and clicks would reach the wall's handlers.
+    on a switch would also pause a video, and clicks would reach the wall's handlers.
     """
     u = max(12, parent.winfo_screenheight() // 90)
-    bg, panel, fg, dim, accent = "#101214", "#1B1F24", "#E6E6E6", "#9AA4AF", "#6CB6FF"
+    bg, card, well, line = "#101214", "#181C21", "#0F1215", "#252A31"
+    fg, dim, faint, accent, hot = "#E6E6E6", "#8C96A1", "#5A626B", "#6CB6FF", "#2A3038"
     win = tk.Toplevel(parent)
     win.withdraw()
     win.title("Tessera Wall settings")
@@ -220,8 +234,10 @@ def settings_window(parent, config_path: str, apply, on_close, topmost: bool = F
 
     pending: dict = {}
     timer = [None]
-    ready = [False]          # tk.Scale fires its command when first given a value; ignore until shown
+    ready = [False]          # controls fire when first given a value; ignore until shown
     refreshers, located = [], {}
+    greyed = []              # (label, hint) of what clean mode overrides
+    clean = tk.BooleanVar(win)
 
     def flush():
         timer[0] = None
@@ -246,74 +262,174 @@ def settings_window(parent, config_path: str, apply, on_close, topmost: bool = F
             win.after_cancel(timer[0])
         timer[0] = win.after(delay, flush)
 
-    tk.Label(win, text="Settings", bg=bg, fg="white", font=font(1.7, True)).pack(anchor="w")
+    def grey_out(*a):
+        for lab, hint in greyed:
+            lab.config(fg=faint if clean.get() else fg)
+            if hint:
+                hint.config(fg=faint if clean.get() else dim)
+    clean.trace_add("write", grey_out)
+
+    tk.Label(win, text="Settings", bg=bg, fg="white", font=font(1.7, True)).pack(anchor="w", pady=(0, u))
+    body = tk.Frame(win, bg=bg)
+    body.pack(fill="both")
+    columns = [tk.Frame(body, bg=bg)]
+    columns[0].grid(row=0, column=0, sticky="nsew")
+    body.grid_columnconfigure(0, weight=1, uniform="col")
+    holder = [None]          # the current card
+    hint_wrap = u * 20
+
+    def section(title):
+        top = u if columns[-1].winfo_children() else 0
+        tk.Label(columns[-1], text=title.upper(), bg=bg, fg=dim, font=font(0.8, True)).pack(
+            anchor="w", pady=(top, u // 3), padx=(u // 8, 0))
+        c = tk.Frame(columns[-1], bg=card, padx=int(u * 1.1), pady=u // 3)
+        c.pack(fill="x")
+        holder[0] = c
+
+    def row(label, opts, click=None):
+        """A card row: label (and grey hint) on the left, the returned frame on the right for the control."""
+        c = holder[0]
+        if c.winfo_children():
+            tk.Frame(c, bg=line, height=1).pack(fill="x")
+        r = tk.Frame(c, bg=card, pady=int(u * 0.55))
+        r.pack(fill="x")
+        left = tk.Frame(r, bg=card)
+        left.pack(side="left", fill="y")
+        lab = tk.Label(left, text=label, bg=card, fg=fg, font=font(), anchor="w")
+        lab.pack(anchor="w")
+        hint = None
+        if opts.get("hint"):
+            hint = tk.Label(left, text=opts["hint"], bg=card, fg=dim, font=font(0.82), anchor="w", justify="left",
+                            wraplength=hint_wrap)
+            hint.pack(anchor="w")
+        right = tk.Frame(r, bg=card)
+        right.pack(side="right", padx=(u, 0))
+        if opts.get("clean"):
+            greyed.append((lab, hint))
+        if click:                     # the whole row toggles, not only the switch
+            for w in (r, left, lab) + ((hint,) if hint else ()):
+                w.bind("<Button-1>", click)
+                w.config(cursor="hand2")
+        return r, right
+
+    def slider(parent_, name, low, high, step, unit):
+        whole = isinstance(C.DEFAULTS[name], int)
+        # A small canvas slider: tk.Scale cannot give its handle a colour of its own, so on a dark
+        # window the handle disappears. Click or drag anywhere on the track to set the value.
+        sw_, sh_, pad = u * 11, int(u * 1.6), u // 2
+        shown = tk.Label(parent_, bg=card, fg=dim, font=font(0.9), width=6, anchor="e")
+        shown.pack(side="right")
+        cv = tk.Canvas(parent_, width=sw_, height=sh_, bg=card, highlightthickness=0, cursor="hand2")
+        cv.pack(side="right")
+
+        def draw(value):
+            x = pad + (sw_ - 2 * pad) * (value - low) / (high - low)
+            mid = sh_ // 2
+            cv.delete("all")
+            cv.create_rectangle(pad, mid - 2, sw_ - pad, mid + 2, fill=line, width=0)
+            cv.create_rectangle(pad, mid - 2, x, mid + 2, fill=accent, width=0)
+            cv.create_oval(x - pad, mid - pad, x + pad, mid + pad, fill="white", width=0)
+            shown.config(text=unit.format(int(value) if whole else value))
+
+        def pick(e):
+            frac = min(1.0, max(0.0, (e.x - pad) / (sw_ - 2 * pad)))
+            value = low + round(frac * (high - low) / step) * step
+            value = int(round(value)) if whole else round(value, 2)
+            draw(value)
+            change(name, value, 150)
+
+        cv.bind("<Button-1>", pick)
+        cv.bind("<B1-Motion>", pick)
+        refreshers.append(lambda: draw(getattr(C, name)))
+        located[name] = cv
+
+    def segments(parent_, name, options):
+        """Options side by side in one dark well; the chosen one is blue."""
+        box = tk.Frame(parent_, bg=well, padx=2, pady=2)
+        box.pack(side="right")
+        var = tk.StringVar(win)
+        group = {}
+        for value, text in options:
+            b = tk.Radiobutton(box, text=text, value=value, variable=var, indicatoron=False, font=font(0.9),
+                               bg=well, fg=dim, selectcolor=accent, activebackground=hot, activeforeground=fg,
+                               relief="flat", bd=0, padx=int(u * 0.75), pady=u // 4, cursor="hand2",
+                               highlightthickness=0, command=lambda: change(name, typed(name, var.get())))
+            b.pack(side="left", padx=(0 if not group else 2, 0))
+            hover(b, well, hot)            # the chosen one shows its blue select colour over this
+            located[f"{name}:{value}"] = group[value] = b
+
+        def recolour(*a):                  # dark text on the chosen (blue) one, grey on the others
+            for k, b in group.items():
+                b.config(fg="#0B0D0F" if str(k) == var.get() else dim)
+        var.trace_add("write", recolour)
+        refreshers.append(lambda: var.set(getattr(C, name)))
+
+    def switch(parent_, name, on, off, r):
+        """An on/off switch; the whole row (r) is clickable, and Space toggles it when focused."""
+        w_, h_ = int(u * 2.4), int(u * 1.3)
+        var = clean if name == "CLEAN_MODE" else tk.BooleanVar(win)
+        cv = tk.Canvas(parent_, width=w_ + 2, height=h_ + 2, bg=card, highlightthickness=0, cursor="hand2",
+                       takefocus=1)
+        cv.pack(side="right")
+
+        def pill(x0, y0, x1, y1, colour):
+            d = y1 - y0
+            cv.create_oval(x0, y0, x0 + d, y1, fill=colour, width=0)
+            cv.create_oval(x1 - d, y0, x1, y1, fill=colour, width=0)
+            cv.create_rectangle(x0 + d // 2, y0, x1 - d // 2, y1, fill=colour, width=0)
+
+        def draw(*a):
+            cv.delete("all")
+            focused = cv.focus_get() is cv
+            mid, gap = (h_ + 2) // 2, max(4, h_ // 5)
+            r_ = (h_ - 2 * gap) // 2                      # knob radius, the same on and off
+            if var.get():
+                pill(1, 1, w_ + 1, h_ + 1, accent)
+                cx = w_ + 1 - gap - r_
+                cv.create_oval(cx - r_, mid - r_, cx + r_, mid + r_, fill="#0B0D0F", width=0)
+            else:
+                pill(1, 1, w_ + 1, h_ + 1, fg if focused else "#6B747E")
+                pill(3, 3, w_ - 1, h_ - 1, card)
+                cx = 1 + gap + r_
+                cv.create_oval(cx - r_ + 1, mid - r_ + 1, cx + r_ - 1, mid + r_ - 1, fill="#AEB6BF", width=0)
+
+        def toggle(e=None):
+            var.set(not var.get())
+            change(name, on if var.get() else off)
+            return "break"
+
+        var.trace_add("write", draw)
+        cv.bind("<Button-1>", toggle)
+        cv.bind("<space>", toggle)
+        cv.bind("<FocusIn>", draw)
+        cv.bind("<FocusOut>", draw)
+        refreshers.append(lambda: var.set(getattr(C, name) != off))
+        located[name] = r
+        return toggle
+
     for item in SETTINGS_UI:
+        item, opts = _split(item)
         kind = item[0]
-        if kind == "section":
-            tk.Label(win, text=item[1], bg=bg, fg=accent, font=font(1.0, True)).pack(anchor="w", pady=(u, u // 4))
+        if kind == "column":
+            columns.append(tk.Frame(body, bg=bg))
+            columns[-1].grid(row=0, column=len(columns) - 1, sticky="nsew", padx=(int(u * 1.5), 0))
+            body.grid_columnconfigure(len(columns) - 1, weight=1, uniform="col")
+        elif kind == "section":
+            section(item[1])
         elif kind == "scale":
             _, name, label, low, high, step, unit = item
-            whole = isinstance(C.DEFAULTS[name], int)
-            row = tk.Frame(win, bg=bg)
-            row.pack(fill="x")
-            tk.Label(row, text=label, bg=bg, fg=fg, font=font(), anchor="w", width=34).pack(side="left")
-            # A small canvas slider: tk.Scale cannot give its handle a colour of its own, so on a dark
-            # window the handle disappears. Click or drag anywhere on the track to set the value.
-            sw_, sh_, pad = u * 15, int(u * 1.6), u // 2
-            cv = tk.Canvas(row, width=sw_, height=sh_, bg=bg, highlightthickness=0, cursor="hand2")
-            cv.pack(side="left")
-            shown = tk.Label(row, bg=bg, fg=dim, font=font(0.95), width=8, anchor="e")
-            shown.pack(side="left")
-
-            def draw(value, cv=cv, shown=shown, low=low, high=high, whole=whole, sw_=sw_, sh_=sh_, pad=pad,
-                     unit=unit):
-                x = pad + (sw_ - 2 * pad) * (value - low) / (high - low)
-                cv.delete("all")
-                cv.create_rectangle(pad, sh_ // 2 - 2, sw_ - pad, sh_ // 2 + 2, fill="#2A3038", width=0)
-                cv.create_rectangle(pad, sh_ // 2 - 2, x, sh_ // 2 + 2, fill=accent, width=0)
-                cv.create_oval(x - pad, sh_ // 2 - pad, x + pad, sh_ // 2 + pad, fill="white", width=0)
-                shown.config(text=unit.format(int(value) if whole else value))
-
-            def pick(e, n=name, draw=draw, low=low, high=high, step=step, whole=whole, sw_=sw_, pad=pad):
-                frac = min(1.0, max(0.0, (e.x - pad) / (sw_ - 2 * pad)))
-                value = low + round(frac * (high - low) / step) * step
-                value = int(round(value)) if whole else round(value, 2)
-                draw(value)
-                change(n, value, 150)
-
-            cv.bind("<Button-1>", pick)
-            cv.bind("<B1-Motion>", pick)
-            refreshers.append(lambda draw=draw, n=name: draw(getattr(C, n)))
-            located[name] = cv
+            _r, right = row(label, opts)
+            slider(right, name, low, high, step, unit)
         elif kind == "choice":
             _, name, label, options = item
-            row = tk.Frame(win, bg=bg)
-            row.pack(fill="x", pady=(u // 4, 0))
-            tk.Label(row, text=label, bg=bg, fg=fg, font=font(), anchor="w", width=14).pack(side="left")
-            var = tk.StringVar(win)
-            group = {}
-            for value, text in options:
-                b = tk.Radiobutton(row, text=text, value=value, variable=var, indicatoron=False, font=font(0.95),
-                                   bg=panel, fg=fg, selectcolor=accent, activebackground="#2A3038",
-                                   activeforeground=fg, relief="flat", bd=0, padx=u, pady=u // 3, cursor="hand2",
-                                   command=lambda n=name, v=var: change(n, typed(n, v.get())))
-                b.pack(side="left", padx=(0, u // 3))
-                hover(b, panel, "#2A3038")                 # the selected one shows its blue select colour
-                located[f"{name}:{value}"] = group[value] = b
-            # dark text on the selected (blue) button, light text on the others
-            var.trace_add("write", lambda *a, v=var, g=group: [b.config(fg="#0B0D0F" if k == v.get() else fg)
-                                                                for k, b in g.items()])
-            refreshers.append(lambda v=var, n=name: v.set(getattr(C, n)))
+            _r, right = row(label, opts)
+            segments(right, name, options)
         elif kind == "check":
             name, label = item[1], item[2]
             on, off = (item[3], item[4]) if len(item) > 3 else (True, False)
-            var = tk.BooleanVar(win)
-            c = tk.Checkbutton(win, text=label, variable=var, bg=bg, fg=fg, selectcolor=panel, font=font(),
-                               activebackground=bg, activeforeground=fg, anchor="w", cursor="hand2",
-                               command=lambda n=name, v=var, a=on, b=off: change(n, a if v.get() else b))
-            c.pack(anchor="w")
-            refreshers.append(lambda v=var, n=name, b=off: v.set(getattr(C, n) != b))
-            located[name] = c
+            flip = []
+            r, right = row(label, opts, click=lambda e, f=flip: f[0]())
+            flip.append(switch(right, name, on, off, r))
 
     def refresh():
         ready[0] = False
@@ -322,7 +438,7 @@ def settings_window(parent, config_path: str, apply, on_close, topmost: bool = F
         win.after(250, lambda: ready.__setitem__(0, True))
 
     def reset():
-        names = [item[1] for item in SETTINGS_UI if item[0] != "section"]
+        names = [_split(item)[0][1] for item in SETTINGS_UI if item[0] not in ("section", "column")]
         ready[0] = True
         for n in names:
             pending[n] = None
@@ -336,23 +452,24 @@ def settings_window(parent, config_path: str, apply, on_close, topmost: bool = F
         on_close()
         fade(win, 0.0, 80, win.destroy)
 
-    status = tk.Label(win, text="Changes are saved as you make them.", bg=bg, fg=dim, font=font(0.9))
-    status.pack(anchor="w", pady=(u, u // 2))
-    row = tk.Frame(win, bg=bg)
-    row.pack(fill="x")
+    foot = tk.Frame(win, bg=bg)
+    foot.pack(fill="x", pady=(int(u * 1.5), 0))
+    status = tk.Label(foot, text="Changes are saved as you make them.", bg=bg, fg=dim, font=font(0.9))
 
-    def button(key, text, command, primary=False, side="left"):
-        b = tk.Button(row, text=text, command=command, font=font(1.0, primary), relief="flat", bd=0, cursor="hand2",
-                      bg=accent if primary else panel, fg="#0B0D0F" if primary else fg, padx=u, pady=u // 3,
-                      activebackground="#8FC8FF" if primary else "#2A3038", activeforeground="#0B0D0F" if primary else fg)
-        b.pack(side=side, padx=(0, u // 2) if side == "left" else (u // 2, 0))
-        hover(b, accent if primary else panel, "#8FC8FF" if primary else "#2A3038")
+    def button(key, text, command, primary=False):
+        b = tk.Button(foot, text=text, command=command, font=font(0.95, primary), relief="flat", bd=0,
+                      cursor="hand2", bg=accent if primary else card, fg="#0B0D0F" if primary else fg,
+                      padx=int(u * (1.4 if primary else 1)), pady=u // 3,
+                      activebackground="#8FC8FF" if primary else hot, activeforeground="#0B0D0F" if primary else fg)
+        b.pack(side="right", padx=(u // 2, 0))
+        hover(b, accent if primary else card, "#8FC8FF" if primary else hot)
         located[key] = b
 
-    button("reset", "Reset these to defaults", reset)
+    button("done", "Done", close, primary=True)
+    button("reset", "Reset to defaults", reset)
     button("file", "Open the settings file", lambda: os.startfile(config_path)
            if os.environ.get("TESSERAWALL_NO_DIALOGS") != "1" else log.info("would open %s", config_path))
-    button("done", "Done", close, primary=True, side="right")
+    status.pack(side="left")
 
     def detach(widget):      # no app-wide bindings inside this window (see docstring)
         widget.bindtags(tuple(t for t in widget.bindtags() if t != "all"))
@@ -483,20 +600,27 @@ def start_window(last_session: list, incoming: queue.Queue, checker: "updates.Ch
     drop.bind("<Button-1>", lambda e: pick_files())
     buttons = {}
 
-    def button(key, text, command, primary=False):
-        b = tk.Button(root, text=text, command=command, font=font(1.05, primary), relief="flat", bd=0,
-                      bg=accent if primary else panel, fg="#0B0D0F" if primary else fg, cursor="hand2",
-                      activebackground="#8FC8FF" if primary else "#2A3038", activeforeground="#0B0D0F" if primary else fg,
-                      pady=u // 2)
-        b.pack(fill="x", pady=(0, u // 2))
+    def button(key, text, command, primary=False, parent=None, column=None):
+        b = tk.Button(parent or root, text=text, command=command, font=font(1.05 if parent is None else 0.95, primary),
+                      relief="flat", bd=0, bg=accent if primary else panel, fg="#0B0D0F" if primary else fg,
+                      cursor="hand2", activebackground="#8FC8FF" if primary else "#2A3038",
+                      activeforeground="#0B0D0F" if primary else fg, pady=u // 2)
+        if column is None:
+            b.pack(fill="x", pady=(0, u // 2))
+        else:
+            b.grid(row=0, column=column, sticky="ew", padx=(0 if column == 0 else u // 4, 0))
         hover(b, accent if primary else panel, "#8FC8FF" if primary else "#2A3038")
         buttons[key] = b
         return b
 
     button("videos", "Choose videos…", pick_files, primary=True).focus_set()
-    button("folder", "Choose a folder…", pick_folder)
-    button("search", "Search YouTube…", search)
-    button("template", "Use a template…", pick_template)
+    trio = tk.Frame(root, bg=bg)             # the other ways in, side by side
+    trio.pack(fill="x", pady=(0, u // 2))
+    for col, (key, text, command) in enumerate((("folder", "Choose a folder…", pick_folder),
+                                                ("search", "Search YouTube…", search),
+                                                ("template", "Use a template…", pick_template))):
+        trio.grid_columnconfigure(col, weight=1, uniform="trio")
+        button(key, text, command, parent=trio, column=col)
     if last_session:
         n = len(last_session)
         button("resume", f"Reopen last session ({n} video{'s' if n != 1 else ''})", lambda: finish(last_session))
@@ -549,11 +673,11 @@ def start_window(last_session: list, incoming: queue.Queue, checker: "updates.Ch
     # (pinned ones stay listed, first); the cross forgets one.
     import sources
     remembered = sources.recent(config_path, limit=sources.RECENT_SHOWN) if config_path else []
-    heading = tk.Label(root, text="Channels and searches", bg=bg, fg=dim, font=font(0.9, True))
+    heading = tk.Label(root, text="CHANNELS AND SEARCHES", bg=bg, fg=dim, font=font(0.8, True))
     heading_h = 0
     if remembered:
-        heading.pack(anchor="w", pady=(u // 3, u // 4))
-        heading_h = heading.winfo_reqheight() + u // 3 + u // 4
+        heading.pack(anchor="w", pady=(u // 2, u // 3), padx=(u // 8, 0))
+        heading_h = heading.winfo_reqheight() + u // 2 + u // 3
 
     def recent_row(i, d):
         row = tk.Frame(root, bg=panel)
