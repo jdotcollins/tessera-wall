@@ -365,6 +365,14 @@ folder on the development PC still has the old name; nothing depends on it.
   videos) and shows "Getting videos from …". Shorts start as 9:16 tiles. Quality: `sources.height_for`
   gives each new link the smallest common height covering screen_h / sqrt(videos) (720p for 4-6 on
   1440p), capped by `stream_max_height`; for a Short the cap applies to the width (`ytdlp.mpv_args`).
+- Recent and pinned sources: `take_pool_results` calls `sources.remember` for each source opened with
+  n > 0 (not for ones re-listed for a reopened session), with the list's own title (`load` also prints
+  `playlist:` + `TITLE_LINE` + title once per list; it is saved in the pool cache, `cached_title`), so a
+  playlist reads by name (`menu_name`, `label`). `sources.json` next to the settings file holds
+  {source, title, pinned, used}: pinned ones are kept, unpinned ones only the latest `RECENT_KEEP` (20).
+  The start window lists every pinned one, then recent ones up to `RECENT_SHOWN` (6), each with a star
+  (`set_pinned`) and a cross (`forget`); the top bar's *Recent* menu (`Wall.recent_menu`, shown once
+  something is remembered) lists up to 12 and puts the pick into `incoming`, like pasting its link.
 - Channel videos as a feed. `mode_of(t)`: source videos follow `source_end` (`source_when_finished`,
   default random; E while pointing at one), others `end_mode`; loop-file is set per player. Switching by
   page link costs 3.4-4.1 s (mpv's hook runs yt-dlp + Deno). So `prepare_next` picks each source video's

@@ -544,6 +544,65 @@ def start_window(last_session: list, incoming: queue.Queue, checker: "updates.Ch
 
     for i, t in enumerate(ready):
         button(f"tpl{i}", f"Play template \u201c{t.name}\u201d ({t.count} videos)", lambda t=t: play_ready(t))
+
+    # Recent and pinned channels, playlists and searches: one click opens a wall of them. The star pins one
+    # (pinned ones stay listed, first); the cross forgets one.
+    import sources
+    remembered = sources.recent(config_path, limit=sources.RECENT_SHOWN) if config_path else []
+    heading = tk.Label(root, text="Channels and searches", bg=bg, fg=dim, font=font(0.9, True))
+    heading_h = 0
+    if remembered:
+        heading.pack(anchor="w", pady=(u // 3, u // 4))
+        heading_h = heading.winfo_reqheight() + u // 3 + u // 4
+
+    def recent_row(i, d):
+        row = tk.Frame(root, bg=panel)
+        row.pack(fill="x", pady=(0, u // 4))
+        src = d["source"]
+        b = tk.Button(row, text=sources.menu_name(src, d.get("title")), anchor="w",
+                      command=lambda: (log.info("start window recent picked: %s", src), finish([src])),
+                      font=font(0.95), relief="flat", bd=0, bg=panel, fg=fg, cursor="hand2", padx=u // 2,
+                      activebackground="#2A3038", activeforeground=fg, pady=u // 4)
+        b.pack(side="left", fill="x", expand=True)
+        hover(b, panel, "#2A3038")
+        pin = tk.Label(row, bg=panel, font=font(1.05), cursor="hand2", padx=u // 2)
+        cross = tk.Label(row, text="\u2715", bg=panel, fg=dim, font=font(0.8), cursor="hand2", padx=u // 2)
+        cross.pack(side="right", fill="y")
+        pin.pack(side="right", fill="y")
+        state = {"pinned": bool(d.get("pinned"))}
+
+        def draw_pin():
+            pin.config(text="\u2605" if state["pinned"] else "\u2606", fg=accent if state["pinned"] else dim)
+
+        def toggle(e=None):
+            state["pinned"] = not state["pinned"]
+            sources.set_pinned(config_path, src, state["pinned"])
+            log.info("start window %s %s", "pinned" if state["pinned"] else "unpinned", src)
+            draw_pin()
+
+        def drop_row(e=None):
+            sources.forget(config_path, src)
+            log.info("start window forgot %s", src)
+            # Shrink the window by the row, so the drop zone (which takes spare room) doesn't grow and
+            # push the rest of the list down under the pointer. The heading goes with the last row.
+            gone = row.winfo_height() + u // 4
+            row.destroy()
+            for key in (f"recent{i}", f"pin{i}", f"forget{i}"):
+                buttons.pop(key, None)                 # gone: nothing may configure them any more
+            if not any(k.startswith("recent") for k in buttons):
+                heading.destroy()
+                gone += heading_h
+            root.geometry(f"{w}x{max(1, root.winfo_height() - gone)}")
+
+        draw_pin()
+        pin.bind("<ButtonRelease-1>", toggle)              # on release, like a button
+        cross.bind("<ButtonRelease-1>", drop_row)
+        for lbl in (pin, cross):
+            hover(lbl, panel, "#2A3038")
+        buttons[f"recent{i}"], buttons[f"pin{i}"], buttons[f"forget{i}"] = b, pin, cross
+
+    for i, d in enumerate(remembered):
+        recent_row(i, d)
     footer = tk.Frame(root, bg=bg)
     footer.pack(fill="x", pady=(u // 2, 0))
     status = tk.Label(footer, text="In the wall: H shows the controls, Esc exits.", bg=bg, fg=dim, font=font(0.9))

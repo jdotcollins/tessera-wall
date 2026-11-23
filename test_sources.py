@@ -42,10 +42,12 @@ def test_search_is_listed_with_ytsearch():
     calls = []
     Y.init(tempfile.mkdtemp(prefix="tesserawall-search-"))
     Y.find = lambda: "yt-dlp.exe"
-    Y.run = lambda args, timeout, env=None: (calls.append(args), (0, "abcdefghijk\tNA\t60\tNA\tA video\n"))[1]
+    Y.run = lambda args, timeout, env=None: (calls.append(args), (0, "abcdefghijk\tNA\t60\tNA\tA video\n"
+                                                                     + S.TITLE_LINE + "lofi hip hop\n"))[1]
     try:
         got = S.load(S.search_url("lofi  hip hop"))
-        assert [e["url"] for e in got] == ["https://www.youtube.com/watch?v=abcdefghijk"]
+        assert [e["url"] for e in got] == ["https://www.youtube.com/watch?v=abcdefghijk"], "title line skipped"
+        assert S.cached_title(S.search_url("lofi hip hop")) == "lofi hip hop", "the list's title is kept"
         assert calls[0][-1] == "ytsearch100:lofi hip hop" and "1:100" in calls[0], calls[0]
         S.load("https://www.youtube.com/@Test/videos")
         assert calls[1][-1] == "https://www.youtube.com/@Test/videos" and "1:500" in calls[1]
@@ -112,6 +114,55 @@ def test_cache():
         assert S.cached(src) == [{"url": "u"}] and S.cached(src, S.FRESH_AGE) is None, "newest order: an hour"
     finally:
         Y._state_dir = saved
+
+
+def test_names():
+    pl = "https://www.youtube.com/playlist?list=PLabc"
+    assert S.label(pl, "Hits") == "the playlist “Hits”" and S.menu_name(pl, "Hits") == "Playlist: Hits"
+    assert S.menu_name(pl) == "A playlist" or S.cached_title(pl), "no title known"
+    assert S.menu_name("https://www.youtube.com/@NASA/shorts") == "@NASA Shorts"
+    assert S.menu_name(S.search_url("lofi hip hop")) == "Search: lofi hip hop"
+    assert len(S.menu_name(pl, "y" * 80)) == len("Playlist: ") + 46
+
+
+def test_recent():
+    cfg = os.path.join(tempfile.mkdtemp(prefix="tesserawall-recent-"), "config.toml")
+    a, b, c = (f"https://www.youtube.com/@{x}/videos" for x in "ABC")
+    assert S.recent(cfg) == [] and S.recent(cfg, limit=6) == []
+    S.remember(cfg, a)
+    time.sleep(0.01)
+    S.remember(cfg, b)
+    time.sleep(0.01)
+    S.remember(cfg, c, "C title")
+    assert [d["source"] for d in S.recent(cfg)] == [c, b, a], "most recently opened first"
+    assert S.recent(cfg)[0]["title"] == "C title"
+    S.set_pinned(cfg, a, True)
+    assert [d["source"] for d in S.recent(cfg)] == [a, c, b], "pinned first"
+    assert [d["source"] for d in S.recent(cfg, limit=2)] == [a, c]
+    time.sleep(0.01)
+    S.remember(cfg, c)
+    assert S.recent(cfg)[1]["title"] == "C title", "reopening keeps the title"
+    time.sleep(0.01)
+    S.remember(cfg, a)
+    assert S.recent(cfg)[0]["pinned"], "reopening keeps the pin"
+    S.forget(cfg, b)
+    assert [d["source"] for d in S.recent(cfg)] == [a, c]
+    for i in range(S.RECENT_KEEP + 5):
+        S.remember(cfg, S.search_url(f"q{i}"))
+    got = S.recent(cfg)
+    assert len(got) == S.RECENT_KEEP + 1 and got[0]["source"] == a, "only the latest unpinned are kept"
+    assert got[1]["source"] == S.search_url(f"q{S.RECENT_KEEP + 4}")
+    pinned = [S.search_url(f"p{i}") for i in range(8)]
+    for p in pinned:
+        S.remember(cfg, p)
+        S.set_pinned(cfg, p, True)
+    assert len(S.recent(cfg, limit=6)) == 9, "every pinned one is listed, even past the limit"
+    with open(S.recent_path(cfg), "w", encoding="utf-8") as f:
+        f.write('{"sources": [{"source": "not a source"}, 5, {"source": "' + a + '"}]}')
+    assert [d["source"] for d in S.recent(cfg)] == [a], "bad entries ignored"
+    with open(S.recent_path(cfg), "w", encoding="utf-8") as f:
+        f.write("not json")
+    assert S.recent(cfg) == []
 
 
 def test_height_for():

@@ -34,6 +34,9 @@ SEARCH_LIMIT = 100                 # results listed per search (YouTube sends ab
 MAX_AGE = 24 * 3600                # a cached list is used for a day...
 FRESH_AGE = 3600                   # ...or an hour when the newest are wanted
 LISTING = "%(id)s\t%(url)s\t%(duration)s\t%(live_status)s\t%(title)s"   # per entry; the title last (tabs)
+TITLE_LINE = "PLAYLIST TITLE\t"    # printed once after the entries, before the list's own title
+RECENT_KEEP = 20                   # unpinned sources remembered in sources.json; pinned ones are kept
+RECENT_SHOWN = 6                   # listed in the start window: every pinned one, then recent ones to make 6
 _CHANNEL = re.compile(r"^https?://(?:www\.|m\.)?youtube\.com/(@[^/?#]+|channel/[^/?#]+|c/[^/?#]+|user/[^/?#]+)"
                       r"(?:/(videos|shorts|streams|featured))?/?(?:[?#].*)?$", re.IGNORECASE)
 _PLAYLIST = re.compile(r"^https?://(?:www\.|m\.)?youtube\.com/playlist\?(?:.*&)?list=([\w-]+)", re.IGNORECASE)
@@ -82,16 +85,32 @@ def is_short(url: str) -> bool:
     return "/shorts/" in (url or "")
 
 
-def label(source: str) -> str:
-    """'@NASA Shorts', '@NASA videos', 'the playlist', 'the search "lofi"' for messages."""
+def _shorten(text: str, n: int = 40) -> str:
+    return text if len(text) <= n else text[:n - 1].rstrip() + "\u2026"
+
+
+def label(source: str, title: str | None = None) -> str:
+    """'@NASA Shorts', '@NASA videos', 'the playlist "Hits"', 'the search "lofi"' for messages. A playlist's
+    title is the one given, else the one remembered from listing it."""
     q = query_of(source)
     if q:
-        short = q if len(q) <= 40 else q[:39] + "\u2026"   # no backslash inside an f-string: Python 3.11
-        return f"the search \u201c{short}\u201d"
+        return "the search \u201c" + _shorten(q) + "\u201d"
     m = re.match(r"https://www\.youtube\.com/(@[^/]+|channel/[^/]+|c/[^/]+|user/[^/]+)/(\w+)$", source or "")
     if m:
         return f"{m.group(1)} {'Shorts' if m.group(2) == 'shorts' else m.group(2)}"
-    return "the playlist"
+    title = title or cached_title(source)
+    return "the playlist \u201c" + _shorten(title) + "\u201d" if title else "the playlist"
+
+
+def menu_name(source: str, title: str | None = None) -> str:
+    """The name in the recent list: '@NASA Shorts', 'Search: lofi hip hop', 'Playlist: Hits'."""
+    q = query_of(source)
+    if q:
+        return "Search: " + _shorten(q, 48)
+    if _CHANNEL.match(source or ""):
+        return label(source)
+    title = title or cached_title(source)
+    return "Playlist: " + _shorten(title, 46) if title else "A playlist"
 
 
 def parse_listing(text: str) -> list[dict]:
@@ -134,6 +153,16 @@ def cached(source: str, max_age: float = MAX_AGE) -> list[dict] | None:
     return None
 
 
+def cached_title(source: str) -> str:
+    """The list's own title saved when it was last listed (a playlist's name), whatever its age; else ''."""
+    try:
+        with open(cache_path(source), encoding="utf-8") as f:
+            data = json.load(f)
+        return str(data.get("title") or "") if data.get("source") == source else ""
+    except (OSError, ValueError, AttributeError):
+        return ""
+
+
 def load(source: str, limit: int = POOL_LIMIT, max_age: float = MAX_AGE) -> list[dict]:
     """The source's videos in its order (a channel's newest first): from the cache if younger than
     max_age, else listed now with yt-dlp (blocking, call from a worker thread). A search lists its first
@@ -151,8 +180,9 @@ def load(source: str, limit: int = POOL_LIMIT, max_age: float = MAX_AGE) -> list
     target = f"ytsearch{limit}:{q}" if q else source
     t = time.monotonic()
     code, out = ytdlp.run([exe, "--flat-playlist", "--no-warnings", "--playlist-items", f"1:{limit}",
-                           "--print", LISTING, target], 180)
+                           "--print", LISTING, "--print", "playlist:" + TITLE_LINE + "%(title)s", target], 180)
     entries = parse_listing(out)
+    title = next((l[len(TITLE_LINE):].strip() for l in out.splitlines() if l.startswith(TITLE_LINE)), "")
     log.info("source %s: %d videos listed in %.1f s (yt-dlp exit %s)", source, len(entries),
              time.monotonic() - t, code)
     if not entries:
@@ -161,7 +191,7 @@ def load(source: str, limit: int = POOL_LIMIT, max_age: float = MAX_AGE) -> list
     try:
         os.makedirs(os.path.dirname(cache_path(source)), exist_ok=True)
         with open(cache_path(source), "w", encoding="utf-8") as f:
-            json.dump({"source": source, "fetched": time.time(), "entries": entries}, f)
+            json.dump({"source": source, "fetched": time.time(), "title": title, "entries": entries}, f)
     except OSError as e:
         log.info("source cache not saved: %s", e)
     return entries
@@ -203,3 +233,62 @@ def height_for(n: int, screen_h: int, cap: int) -> int:
         if h >= need:
             return min(h, max(144, cap))
     return max(144, cap)
+
+
+# ---- recent and pinned sources (sources.json next to the settings file) --------------------------------
+def recent_path(config_path: str) -> str:
+    return os.path.join(os.path.dirname(os.path.abspath(config_path)), "sources.json")
+
+
+def _read_recent(config_path: str) -> list[dict]:
+    try:
+        with open(recent_path(config_path), encoding="utf-8") as f:
+            data = json.load(f)
+        return [d for d in data.get("sources", []) if isinstance(d, dict) and source_of(str(d.get("source", "")))]
+    except (OSError, ValueError, AttributeError):
+        return []
+
+
+def _write_recent(config_path: str, items: list[dict]):
+    path = recent_path(config_path)
+    try:
+        os.makedirs(os.path.dirname(path), exist_ok=True)
+        with open(path + ".new", "w", encoding="utf-8") as f:
+            json.dump({"sources": items}, f, ensure_ascii=False, indent=1)
+        os.replace(path + ".new", path)
+    except OSError as e:
+        log.info("recent sources not saved: %s", e)
+
+
+def recent(config_path: str, limit: int | None = None) -> list[dict]:
+    """Remembered sources as {source, title, pinned, used}: pinned ones first, then the most recently
+    opened. `limit` keeps every pinned one plus recent ones up to that many in all."""
+    items = sorted(_read_recent(config_path), key=lambda d: (not d.get("pinned"), -float(d.get("used") or 0)))
+    if limit is not None:
+        pinned = [d for d in items if d.get("pinned")]
+        items = pinned + [d for d in items if not d.get("pinned")][:max(0, limit - len(pinned))]
+    return items
+
+
+def remember(config_path: str, source: str, title: str = ""):
+    """A source was opened: put it at the top of the recent list (keeping its pin), with the list's title if
+    known. Only the RECENT_KEEP latest unpinned sources are kept."""
+    items = [d for d in _read_recent(config_path) if d.get("source") != source]
+    old = next((d for d in _read_recent(config_path) if d.get("source") == source), {})
+    items.insert(0, {"source": source, "title": title or old.get("title", ""),
+                     "pinned": bool(old.get("pinned")), "used": time.time()})
+    unpinned = [d for d in items if not d.get("pinned")]
+    drop = {id(d) for d in sorted(unpinned, key=lambda d: -float(d.get("used") or 0))[RECENT_KEEP:]}
+    _write_recent(config_path, [d for d in items if id(d) not in drop])
+
+
+def set_pinned(config_path: str, source: str, pinned: bool):
+    items = _read_recent(config_path)
+    for d in items:
+        if d.get("source") == source:
+            d["pinned"] = bool(pinned)
+    _write_recent(config_path, items)
+
+
+def forget(config_path: str, source: str):
+    _write_recent(config_path, [d for d in _read_recent(config_path) if d.get("source") != source])

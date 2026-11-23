@@ -990,6 +990,8 @@ class Wall:
         button("add", "Add videos…", lambda: self.add_from_dialog(folder=False))
         button("folder", "Add a folder…", lambda: self.add_from_dialog(folder=True))
         button("search", "Search YouTube…", self.search_from_dialog)
+        if sources.recent(self.config_path, limit=1):
+            button("recent", "Recent ▾", lambda: self.recent_menu(rects["recent"]))
         button("controls", "Controls", lambda: (self.hide_topbar(), self.toggle_help()))
         button("save", "Save wall\u2026", lambda: (self.hide_topbar(), self.save_wall_as()))
         button("settings", "Settings", lambda: (self.hide_topbar(), self.toggle_settings()))
@@ -1040,6 +1042,27 @@ class Wall:
         if words and words.strip():
             log.info("search typed")
             self.incoming.put(sources.search_url(words))
+        self.hide_topbar()
+
+    def recent_menu(self, anchor: tk.Widget):
+        """Top bar: the recent and pinned channels, playlists and searches; picking one adds videos from
+        it, like pasting its link. Pins are set in the start window."""
+        u = max(13, self.H // 84)
+        menu = tk.Menu(anchor, tearoff=0, bg="#1B1F24", fg="#E6E6E6", activebackground="#2A3038",
+                       activeforeground="white", bd=0, font=("Segoe UI", -u))
+        items = sources.recent(self.config_path, limit=12)
+        for d in items:
+            menu.add_command(label=("★  " if d.get("pinned") else "      ")
+                             + sources.menu_name(d["source"], d.get("title")),
+                             command=lambda s=d["source"]: (log.info("recent picked: %s", s), self.incoming.put(s)))
+        log.info("recent menu: %d item(s) at %d,%d", len(items), anchor.winfo_rootx(),
+                 anchor.winfo_rooty() + anchor.winfo_height())
+        self.dialog_open = True                          # keeps the bar alive while the menu is open
+        try:
+            menu.tk_popup(anchor.winfo_rootx(), anchor.winfo_rooty() + anchor.winfo_height())
+        finally:
+            menu.grab_release()
+            self.dialog_open = False
         self.hide_topbar()
 
     # ---- files that would not play --------------------------------------------
@@ -1117,6 +1140,8 @@ class Wall:
                 continue
             self.pools[source] = entries
             self.title_of.update({e["url"]: e["title"] for e in entries})
+            if n:                                        # opened by the user, not reopened with a session
+                sources.remember(self.config_path, source, sources.cached_title(source))
             picked = sources.pick(entries, n, {t.path for t in self.tiles}, C.SOURCE_ORDER, self.seen)
             self.seen.update(e["url"] for e in picked)
             log.info("%s: opening %d of %d videos", source, len(picked), len(entries))

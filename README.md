@@ -84,6 +84,11 @@ matches. Either way, a video that has already been on the wall comes back only o
 been, and N, *Move on* and the endless feed work down the list. With *Newest first* a channel's list is
 fetched again after an hour instead of a day.
 
+**Recent and pinned.** The channels, playlists and searches you open are remembered: the start window
+lists the latest ones under *Channels and searches*, and the menu bar's *Recent* opens one in the wall.
+Click the star next to one in the start window to pin it, so it stays at the top of both lists; the cross
+removes one.
+
 To keep data use down, each video asks for a quality that suits its share of the screen (720p with
 six on a 1440p monitor), never above `stream_max_height`.
 
@@ -153,7 +158,7 @@ the mouse still work, and **I** brings it all back. Each of those can also be sw
 Settings, under *On screen*, where *Clean mode* makes every wall open that way.
 
 Press **H** in the wall for the list of controls, or rest the pointer on the top edge of the screen
-for a small menu bar with *Add videos*, *Add a folder*, *Search YouTube…*, *Controls*, *Save wall…*,
+for a small menu bar with *Add videos*, *Add a folder*, *Search YouTube…*, *Recent*, *Controls*, *Save wall…*,
 *Settings* and *Close*.
 
 A wall holds up to 24 videos. Before opening each one, Tessera Wall estimates whether your graphics card
