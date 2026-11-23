@@ -178,18 +178,23 @@ folder on the development PC still has the old name; nothing depends on it.
 - Installer checked 2026-11-12 on the development PC (silent install, upgrade over an existing
   install, shortcuts, Send To targets, right-click on files and folders, uninstall leaves only the
   user's settings). Not yet tried on a clean PC or through the interactive wizard.
-- Settings window: `settings_window()` is built from the `SETTINGS_UI` table: two columns of cards
-  (a `("column",)` entry starts the second), each row a label with an optional grey hint on the left and
-  its control on the right: a slider, a segmented choice (radio buttons in one dark well) or an on/off
-  switch. Entries marked `"clean": True` are greyed while the Clean mode switch is on, because clean mode
+- Settings window: `settings_window()` is built from the `SETTINGS_UI` table, laid out after Windows 11's
+  Settings app (Fluent 2): two columns (a `("column",)` entry starts the second), one rounded card per
+  setting with its title and grey description on the left and its control on the right: a slider, a
+  segmented choice or an on/off switch with "On"/"Off" beside it. Sizes are Fluent's (14 px text, 4 px
+  grid, 32 px controls) scaled to the screen by `f()`. Every choice control has the same width
+  (`control_w`, from its longest option), options split evenly, and sliders take that width too, so the
+  controls line up down each column. Cards, controls and buttons are Canvas drawings: `rounded()` draws
+  smooth corners from small anti-aliased images (`_aa_corners`), since tk's own ovals have hard edges.
+  Entries marked `"clean": True` are greyed while the Clean mode switch is on, because clean mode
   overrides them. Each change is written with `config.set_user_values()`, which
   rewrites only that key's line in the user's file (the commented template line counts, so order and
   descriptions survive) and never touches the user's other lines; "Reset to defaults" comments
   the lines out again. In the wall, `Wall.apply_settings` then calls `reload_config(quiet=True)` and,
   for layout/crop, also switches the current mode, so the wall changes while the window is open.
   Its widgets are removed from the app-wide bindtag `all`, so Space on a switch does not also pause
-  a video. Sliders and switches are small Canvas controls (`tk.Scale` cannot colour its handle); a
-  switch's whole row is clickable and its logged rectangle is the row. Opened
+  a video. A switch's whole card is clickable and its logged rectangle is the card; a segment's logged
+  rectangle is its part of the choice control. Opened
   with `S`, the menu bar, or the start window's link; `tests/settings_test.py` covers the wall route
   with real clicks. **The start-window route and "Open the settings file" are not tested.**
 - Menu bar: `Wall.update_topbar` shows a slim always-on-top `Toplevel` when the pointer rests on the top

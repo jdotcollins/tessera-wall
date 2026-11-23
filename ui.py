@@ -189,7 +189,7 @@ SETTINGS_UI = [
     ("choice", "SOURCE_WHEN_FINISHED", "When one ends",
      [("random", "Another"), ("next", "The next"), ("loop", "Play it again")]),
     ("section", "On screen"),
-    ("check", "CLEAN_MODE", "Clean mode", {"hint": "Just the videos; overrides what it greys out. I in the wall"}),
+    ("check", "CLEAN_MODE", "Clean mode", {"hint": "Only the videos: overrides the greyed-out ones. I in the wall"}),
     ("check", "FOCUS_OUTLINE", "Outline", {"hint": "Around the video you point at", "clean": True}),
     ("check", "SEEKBAR_HEIGHT", "Progress line and time", 6, 0, {"hint": "On the video you point at", "clean": True}),
     ("check", "SEEKBAR_SHOW_NAME", "File name next to the time", {"clean": True}),
@@ -213,30 +213,104 @@ def _split(item):
     return (item[:-1], item[-1]) if isinstance(item[-1], dict) else (item, {})
 
 
+_AA_CACHE: dict = {}
+
+
+def _rgb(colour: str) -> tuple:
+    return tuple(int(colour[i:i + 2], 16) for i in (1, 3, 5))
+
+
+def _aa_corners(master, r: int, fill: str, bg: str, stroke: str | None, sw: int) -> list:
+    """The four r x r corner images of a rounded rectangle, smoothed (4 x 4 samples a pixel): tk's own ovals
+    have hard, stair-stepped edges. Cached per colour set; held by the Tk root so they outlive one window."""
+    key = (str(master), r, fill, bg, stroke, sw)
+    if key in _AA_CACHE:
+        return _AA_CACHE[key]
+    import math
+    F, B, S = _rgb(fill), _rgb(bg), _rgb(stroke or fill)
+    n, rows = 4, []
+    for y in range(r):
+        row = []
+        for x in range(r):
+            cf = cs = 0
+            for sy in range(n):
+                for sx in range(n):
+                    d = math.hypot(r - (x + (sx + 0.5) / n), r - (y + (sy + 0.5) / n))
+                    if d <= r - sw:
+                        cf += 1
+                    elif d <= r:
+                        cs += 1
+            cf, cs = cf / n / n, cs / n / n
+            row.append("#%02x%02x%02x" % tuple(round(F[i] * cf + S[i] * cs + B[i] * (1 - cf - cs)) for i in range(3)))
+        rows.append(row)
+    images = []
+    for flip_x, flip_y in ((0, 0), (1, 0), (0, 1), (1, 1)):          # top-left, top-right, bottom-left, bottom-right
+        img = tk.PhotoImage(master=master, width=r, height=r)
+        img.put(" ".join("{" + " ".join(rows[r - 1 - y if flip_y else y][::-1 if flip_x else 1]) + "}"
+                         for y in range(r)))
+        images.append(img)
+    _AA_CACHE[key] = images
+    return images
+
+
+def rounded(cv, x0, y0, x1, y1, r, fill: str, bg: str, stroke: str | None = None, sw: int = 0, tag="shape"):
+    """Draw a smooth rounded rectangle (or, with r = half the height, a pill or circle) on a canvas whose
+    background behind it is `bg`. With `stroke`, a `sw` px border of that colour."""
+    x0, y0, x1, y1 = int(round(x0)), int(round(y0)), int(round(x1)), int(round(y1))
+    r = max(1, min(int(r), (x1 - x0) // 2, (y1 - y0) // 2))
+    tl, tr, bl, br = _aa_corners(cv._root(), r, fill, bg, stroke if sw else None, sw if stroke else 0)
+    for img, x, y in ((tl, x0, y0), (tr, x1 - r, y0), (bl, x0, y1 - r), (br, x1 - r, y1 - r)):
+        cv.create_image(x, y, anchor="nw", image=img, tags=tag)
+    edge = stroke if (stroke and sw) else fill
+    cv.create_rectangle(x0 + r, y0, x1 - r, y1, fill=edge, width=0, tags=tag)
+    cv.create_rectangle(x0, y0 + r, x1, y1 - r, fill=edge, width=0, tags=tag)
+    if stroke and sw:
+        cv.create_rectangle(x0 + r, y0 + sw, x1 - r, y1 - sw, fill=fill, width=0, tags=tag)
+        cv.create_rectangle(x0 + sw, y0 + r, x1 - sw, y1 - r, fill=fill, width=0, tags=tag)
+
+
 def settings_window(parent, config_path: str, apply, on_close, topmost: bool = False) -> tk.Toplevel:
     """Build and show the settings window. Each change is written to the settings file at once and
     `apply(names)` is called, so the wall behind it updates while the user watches.
 
+    Laid out after Windows 11's Settings (Fluent 2): one rounded card per setting, title and grey description
+    on the left, the control on the right. Sizes are Fluent's (14 px body text, 4 px grid, 32 px controls)
+    scaled to the screen by f(). Every choice control has the same width, its options split evenly, so the
+    controls line up down each column; sliders take that width too.
+
     Its widgets are taken out of the app-wide key and mouse bindings (bindtag "all"): otherwise Space
     on a switch would also pause a video, and clicks would reach the wall's handlers.
     """
+    import tkinter.font as tkfont
     u = max(12, parent.winfo_screenheight() // 90)
-    bg, card, well, line = "#101214", "#181C21", "#0F1215", "#252A31"
-    fg, dim, faint, accent, hot = "#E6E6E6", "#8C96A1", "#5A626B", "#6CB6FF", "#2A3038"
+
+    def f(px):               # a Fluent size (designed around 14 px text) at this screen's text size u
+        return max(1, round(px * u / 14))
+
+    bg, card, edge, well, ctl = "#101214", "#1A1E23", "#232830", "#121519", "#2C323A"
+    fg, dim, faint, accent, accent_hot, hot = "#E6E6E6", "#A3ACB6", "#5A626B", "#6CB6FF", "#8FC8FF", "#262C33"
+    body, caption = ("Segoe UI", -f(14)), ("Segoe UI", -f(12))
+    strong, title_font = ("Segoe UI Semibold", -f(14)), ("Segoe UI Semibold", -f(28))
     win = tk.Toplevel(parent)
     win.withdraw()
     win.title("Tessera Wall settings")
-    win.configure(bg=bg, padx=u * 2, pady=int(u * 1.5))
+    win.configure(bg=bg, padx=f(32), pady=f(24))
     win.resizable(False, False)
+    measure = tkfont.Font(root=win, family="Segoe UI", size=-f(14)).measure
+    measure_strong = tkfont.Font(root=win, family="Segoe UI Semibold", size=-f(14)).measure
 
-    def font(scale=1.0, bold=False):
-        return ("Segoe UI", -int(u * scale), "bold") if bold else ("Segoe UI", -int(u * scale))
+    items = [_split(i) for i in SETTINGS_UI]
+    seg_pad = f(12)
+    control_w = max([f(240)] + [len(i[0][3]) * (max(measure(t) for _, t in i[0][3]) + 2 * seg_pad)
+                                for i in items if i[0][0] == "choice"])
+    control_h, card_pad_x, card_pad_y, card_min_h = f(32), f(16), f(8), f(56)
+    hint_wrap = f(280)
 
     pending: dict = {}
     timer = [None]
     ready = [False]          # controls fire when first given a value; ignore until shown
     refreshers, located = [], {}
-    greyed = []              # (label, hint) of what clean mode overrides
+    greyed = []              # (title, description) of what clean mode overrides
     clean = tk.BooleanVar(win)
 
     def flush():
@@ -269,66 +343,84 @@ def settings_window(parent, config_path: str, apply, on_close, topmost: bool = F
                 hint.config(fg=faint if clean.get() else dim)
     clean.trace_add("write", grey_out)
 
-    tk.Label(win, text="Settings", bg=bg, fg="white", font=font(1.7, True)).pack(anchor="w", pady=(0, u))
-    body = tk.Frame(win, bg=bg)
-    body.pack(fill="both")
-    columns = [tk.Frame(body, bg=bg)]
+    tk.Label(win, text="Settings", bg=bg, fg="white", font=title_font).pack(anchor="w", pady=(0, f(16)))
+    body_frame = tk.Frame(win, bg=bg)
+    body_frame.pack(fill="both")
+    columns = [tk.Frame(body_frame, bg=bg)]
     columns[0].grid(row=0, column=0, sticky="nsew")
-    body.grid_columnconfigure(0, weight=1, uniform="col")
-    holder = [None]          # the current card
-    hint_wrap = u * 20
+    body_frame.grid_columnconfigure(0, weight=1, uniform="col")
 
-    def section(title):
-        top = u if columns[-1].winfo_children() else 0
-        tk.Label(columns[-1], text=title.upper(), bg=bg, fg=dim, font=font(0.8, True)).pack(
-            anchor="w", pady=(top, u // 3), padx=(u // 8, 0))
-        c = tk.Frame(columns[-1], bg=card, padx=int(u * 1.1), pady=u // 3)
-        c.pack(fill="x")
-        holder[0] = c
+    def section(text):
+        top = f(16) if columns[-1].winfo_children() else 0
+        tk.Label(columns[-1], text=text, bg=bg, fg=fg, font=strong).pack(anchor="w", pady=(top, f(8)))
 
-    def row(label, opts, click=None):
-        """A card row: label (and grey hint) on the left, the returned frame on the right for the control."""
-        c = holder[0]
-        if c.winfo_children():
-            tk.Frame(c, bg=line, height=1).pack(fill="x")
-        r = tk.Frame(c, bg=card, pady=int(u * 0.55))
-        r.pack(fill="x")
-        left = tk.Frame(r, bg=card)
-        left.pack(side="left", fill="y")
-        lab = tk.Label(left, text=label, bg=card, fg=fg, font=font(), anchor="w")
+    def card_row(label, opts, click=None):
+        """One setting: a rounded card with its title (and description) on the left; returns the frame on the
+        right for the control, and the card itself."""
+        cv = tk.Canvas(columns[-1], bg=bg, highlightthickness=0, height=card_min_h)
+        cv.pack(fill="x", pady=(0, f(4)))
+        inner = tk.Frame(cv, bg=card)
+        item = cv.create_window(card_pad_x, card_pad_y, anchor="nw", window=inner)
+
+        def redraw(e=None):
+            w_, h_ = cv.winfo_width(), cv.winfo_height()
+            cv.delete("shape")
+            rounded(cv, 0, 0, w_, h_, f(5), card, bg, edge, 1)
+            cv.itemconfig(item, width=w_ - 2 * card_pad_x)
+            cv.coords(item, card_pad_x, (h_ - inner.winfo_reqheight()) // 2)
+
+        def fit(e=None):         # a canvas does not size itself to the frame inside it: ask for that size
+            w_ = inner.winfo_reqwidth() + 2 * card_pad_x
+            h_ = max(card_min_h, inner.winfo_reqheight() + 2 * card_pad_y)
+            if (int(cv.cget("width")), int(cv.cget("height"))) != (w_, h_):
+                cv.config(width=w_, height=h_)
+            else:
+                redraw()
+        cv.bind("<Configure>", redraw)
+        inner.bind("<Configure>", fit)
+        inner.grid_columnconfigure(0, weight=1)
+        left = tk.Frame(inner, bg=card)
+        left.grid(row=0, column=0, sticky="w")
+        lab = tk.Label(left, text=label, bg=card, fg=fg, font=body, anchor="w")
         lab.pack(anchor="w")
         hint = None
         if opts.get("hint"):
-            hint = tk.Label(left, text=opts["hint"], bg=card, fg=dim, font=font(0.82), anchor="w", justify="left",
+            hint = tk.Label(left, text=opts["hint"], bg=card, fg=dim, font=caption, anchor="w", justify="left",
                             wraplength=hint_wrap)
             hint.pack(anchor="w")
-        right = tk.Frame(r, bg=card)
-        right.pack(side="right", padx=(u, 0))
+        right = tk.Frame(inner, bg=card)
+        right.grid(row=0, column=1, sticky="e", padx=(f(16), 0))
         if opts.get("clean"):
             greyed.append((lab, hint))
-        if click:                     # the whole row toggles, not only the switch
-            for w in (r, left, lab) + ((hint,) if hint else ()):
+        if click:                     # the whole card toggles, not only the switch
+            for w in (cv, inner, left, lab, right) + ((hint,) if hint else ()):
                 w.bind("<Button-1>", click)
                 w.config(cursor="hand2")
-        return r, right
+        return cv, right
 
     def slider(parent_, name, low, high, step, unit):
         whole = isinstance(C.DEFAULTS[name], int)
-        # A small canvas slider: tk.Scale cannot give its handle a colour of its own, so on a dark
-        # window the handle disappears. Click or drag anywhere on the track to set the value.
-        sw_, sh_, pad = u * 11, int(u * 1.6), u // 2
-        shown = tk.Label(parent_, bg=card, fg=dim, font=font(0.9), width=6, anchor="e")
-        shown.pack(side="right")
+        value_w = measure("1000 ms") + f(8)
+        # The canvas is the track only, with a margin of u // 2 at each end (tests click at known fractions).
+        sw_, sh_, pad = control_w - value_w, control_h, u // 2
         cv = tk.Canvas(parent_, width=sw_, height=sh_, bg=card, highlightthickness=0, cursor="hand2")
-        cv.pack(side="right")
+        cv.pack(side="left")
+        box = tk.Frame(parent_, bg=card, width=value_w, height=sh_)
+        box.pack(side="left")
+        box.pack_propagate(False)
+        shown = tk.Label(box, bg=card, fg=dim, font=body, anchor="e")
+        shown.pack(fill="both", expand=True)
 
         def draw(value):
             x = pad + (sw_ - 2 * pad) * (value - low) / (high - low)
-            mid = sh_ // 2
+            mid, t = sh_ // 2, max(2, f(4) // 2)
             cv.delete("all")
-            cv.create_rectangle(pad, mid - 2, sw_ - pad, mid + 2, fill=line, width=0)
-            cv.create_rectangle(pad, mid - 2, x, mid + 2, fill=accent, width=0)
-            cv.create_oval(x - pad, mid - pad, x + pad, mid + pad, fill="white", width=0)
+            cv.create_rectangle(pad, mid - t, sw_ - pad, mid + t, fill=ctl, width=0)
+            cv.create_rectangle(pad, mid - t, x, mid + t, fill=accent, width=0)
+            r_ = pad                                       # Fluent's thumb: a dark disc with an accent dot
+            rounded(cv, x - r_, mid - r_, x + r_, mid + r_, r_, "#3A4048", card)
+            r2 = max(2, r_ * 5 // 9)
+            rounded(cv, x - r2, mid - r2, x + r2, mid + r2, r2, accent, "#3A4048")
             shown.config(text=unit.format(int(value) if whole else value))
 
         def pick(e):
@@ -344,54 +436,73 @@ def settings_window(parent, config_path: str, apply, on_close, topmost: bool = F
         located[name] = cv
 
     def segments(parent_, name, options):
-        """Options side by side in one dark well; the chosen one is blue."""
-        box = tk.Frame(parent_, bg=well, padx=2, pady=2)
-        box.pack(side="right")
-        var = tk.StringVar(win)
-        group = {}
-        for value, text in options:
-            b = tk.Radiobutton(box, text=text, value=value, variable=var, indicatoron=False, font=font(0.9),
-                               bg=well, fg=dim, selectcolor=accent, activebackground=hot, activeforeground=fg,
-                               relief="flat", bd=0, padx=int(u * 0.75), pady=u // 4, cursor="hand2",
-                               highlightthickness=0, command=lambda: change(name, typed(name, var.get())))
-            b.pack(side="left", padx=(0 if not group else 2, 0))
-            hover(b, well, hot)            # the chosen one shows its blue select colour over this
-            located[f"{name}:{value}"] = group[value] = b
-
-        def recolour(*a):                  # dark text on the chosen (blue) one, grey on the others
-            for k, b in group.items():
-                b.config(fg="#0B0D0F" if str(k) == var.get() else dim)
-        var.trace_add("write", recolour)
-        refreshers.append(lambda: var.set(getattr(C, name)))
-
-    def switch(parent_, name, on, off, r):
-        """An on/off switch; the whole row (r) is clickable, and Space toggles it when focused."""
-        w_, h_ = int(u * 2.4), int(u * 1.3)
-        var = clean if name == "CLEAN_MODE" else tk.BooleanVar(win)
-        cv = tk.Canvas(parent_, width=w_ + 2, height=h_ + 2, bg=card, highlightthickness=0, cursor="hand2",
+        """A segmented choice, control_w wide, options of equal width; the chosen one is blue.
+        Left and Right change it when it has the keyboard focus."""
+        cv = tk.Canvas(parent_, width=control_w, height=control_h, bg=card, highlightthickness=0, cursor="hand2",
                        takefocus=1)
         cv.pack(side="right")
-
-        def pill(x0, y0, x1, y1, colour):
-            d = y1 - y0
-            cv.create_oval(x0, y0, x0 + d, y1, fill=colour, width=0)
-            cv.create_oval(x1 - d, y0, x1, y1, fill=colour, width=0)
-            cv.create_rectangle(x0 + d // 2, y0, x1 - d // 2, y1, fill=colour, width=0)
+        var = tk.StringVar(win)
+        values = [str(v) for v, _ in options]
+        hover_at = [None]
+        seg_w = control_w / len(options)
 
         def draw(*a):
             cv.delete("all")
             focused = cv.focus_get() is cv
-            mid, gap = (h_ + 2) // 2, max(4, h_ // 5)
-            r_ = (h_ - 2 * gap) // 2                      # knob radius, the same on and off
+            rounded(cv, 0, 0, control_w, control_h, f(4), well, card, fg if focused else ctl, 1)
+            for i, (value, text) in enumerate(options):
+                x0, x1 = round(i * seg_w), round((i + 1) * seg_w)
+                chosen = str(value) == var.get()
+                if chosen or hover_at[0] == i:
+                    rounded(cv, x0 + 3, 3, x1 - 3, control_h - 3, f(3), accent if chosen else hot, well)
+                cv.create_text((x0 + x1) / 2, control_h / 2, text=text, font=body,
+                               fill="#0B0D0F" if chosen else (fg if hover_at[0] == i else dim))
+                located[f"{name}:{value}"] = (cv, x0, 0, x1 - x0, control_h)
+
+        def choose(i):
+            i = max(0, min(len(values) - 1, i))
+            if values[i] != var.get():
+                var.set(values[i])
+                change(name, typed(name, values[i]))
+
+        def hover_to(i):
+            if hover_at[0] != i:
+                hover_at[0] = i
+                draw()
+
+        cv.bind("<Button-1>", lambda e: choose(int(e.x // seg_w)))
+        cv.bind("<Motion>", lambda e: hover_to(min(len(values) - 1, int(e.x // seg_w))))
+        cv.bind("<Leave>", lambda e: hover_to(None))
+        cv.bind("<Left>", lambda e: choose(values.index(var.get()) - 1) if var.get() in values else None)
+        cv.bind("<Right>", lambda e: choose(values.index(var.get()) + 1) if var.get() in values else None)
+        cv.bind("<FocusIn>", draw)
+        cv.bind("<FocusOut>", draw)
+        var.trace_add("write", draw)
+        refreshers.append(lambda: var.set(str(getattr(C, name))))
+
+    def switch(parent_, name, on, off, card_cv):
+        """Fluent's toggle switch with "On"/"Off" beside it; the whole card is clickable, Space toggles it when
+        it has the keyboard focus."""
+        w_, h_ = f(40), f(20)
+        var = clean if name == "CLEAN_MODE" else tk.BooleanVar(win)
+        cv = tk.Canvas(parent_, width=w_, height=h_, bg=card, highlightthickness=0, cursor="hand2", takefocus=1)
+        cv.pack(side="right")
+        word = tk.Label(parent_, bg=card, fg=fg, font=body)
+        word.pack(side="right", padx=(0, f(12)))
+
+        def draw(*a):
+            cv.delete("all")
+            focused = cv.focus_get() is cv
+            r_ = h_ // 2
             if var.get():
-                pill(1, 1, w_ + 1, h_ + 1, accent)
-                cx = w_ + 1 - gap - r_
-                cv.create_oval(cx - r_, mid - r_, cx + r_, mid + r_, fill="#0B0D0F", width=0)
+                rounded(cv, 0, 0, w_, h_, r_, accent, card)
+                k = f(7)
+                rounded(cv, w_ - r_ - k, r_ - k, w_ - r_ + k, r_ + k, k, "#0B0D0F", accent)
             else:
-                pill(1, 1, w_ + 1, h_ + 1, fg if focused else "#6B747E")
-                pill(3, 3, w_ - 1, h_ - 1, card)
-                cx = 1 + gap + r_
-                cv.create_oval(cx - r_ + 1, mid - r_ + 1, cx + r_ - 1, mid + r_ - 1, fill="#AEB6BF", width=0)
+                rounded(cv, 0, 0, w_, h_, r_, card, card, fg if focused else "#8A939D", 1)
+                k = f(6)
+                rounded(cv, r_ - k, r_ - k, r_ + k, r_ + k, k, "#B5BDC6", card)
+            word.config(text="On" if var.get() else "Off")
 
         def toggle(e=None):
             var.set(not var.get())
@@ -399,37 +510,38 @@ def settings_window(parent, config_path: str, apply, on_close, topmost: bool = F
             return "break"
 
         var.trace_add("write", draw)
-        cv.bind("<Button-1>", toggle)
+        for w in (cv, word):
+            w.bind("<Button-1>", toggle)
+            w.config(cursor="hand2")
         cv.bind("<space>", toggle)
         cv.bind("<FocusIn>", draw)
         cv.bind("<FocusOut>", draw)
         refreshers.append(lambda: var.set(getattr(C, name) != off))
-        located[name] = r
+        located[name] = card_cv
         return toggle
 
-    for item in SETTINGS_UI:
-        item, opts = _split(item)
+    for item, opts in items:
         kind = item[0]
         if kind == "column":
-            columns.append(tk.Frame(body, bg=bg))
-            columns[-1].grid(row=0, column=len(columns) - 1, sticky="nsew", padx=(int(u * 1.5), 0))
-            body.grid_columnconfigure(len(columns) - 1, weight=1, uniform="col")
+            columns.append(tk.Frame(body_frame, bg=bg))
+            columns[-1].grid(row=0, column=len(columns) - 1, sticky="nsew", padx=(f(24), 0))
+            body_frame.grid_columnconfigure(len(columns) - 1, weight=1, uniform="col")
         elif kind == "section":
             section(item[1])
         elif kind == "scale":
             _, name, label, low, high, step, unit = item
-            _r, right = row(label, opts)
+            _cv, right = card_row(label, opts)
             slider(right, name, low, high, step, unit)
         elif kind == "choice":
             _, name, label, options = item
-            _r, right = row(label, opts)
+            _cv, right = card_row(label, opts)
             segments(right, name, options)
         elif kind == "check":
             name, label = item[1], item[2]
             on, off = (item[3], item[4]) if len(item) > 3 else (True, False)
             flip = []
-            r, right = row(label, opts, click=lambda e, f=flip: f[0]())
-            flip.append(switch(right, name, on, off, r))
+            card_cv, right = card_row(label, opts, click=lambda e, fl=flip: fl[0]())
+            flip.append(switch(right, name, on, off, card_cv))
 
     def refresh():
         ready[0] = False
@@ -438,7 +550,7 @@ def settings_window(parent, config_path: str, apply, on_close, topmost: bool = F
         win.after(250, lambda: ready.__setitem__(0, True))
 
     def reset():
-        names = [_split(item)[0][1] for item in SETTINGS_UI if item[0] not in ("section", "column")]
+        names = [item[1] for item, _ in items if item[0] not in ("section", "column")]
         ready[0] = True
         for n in names:
             pending[n] = None
@@ -453,17 +565,32 @@ def settings_window(parent, config_path: str, apply, on_close, topmost: bool = F
         fade(win, 0.0, 80, win.destroy)
 
     foot = tk.Frame(win, bg=bg)
-    foot.pack(fill="x", pady=(int(u * 1.5), 0))
-    status = tk.Label(foot, text="Changes are saved as you make them.", bg=bg, fg=dim, font=font(0.9))
+    foot.pack(fill="x", pady=(f(24), 0))
+    status = tk.Label(foot, text="Changes are saved as you make them.", bg=bg, fg=dim, font=caption)
 
     def button(key, text, command, primary=False):
-        b = tk.Button(foot, text=text, command=command, font=font(0.95, primary), relief="flat", bd=0,
-                      cursor="hand2", bg=accent if primary else card, fg="#0B0D0F" if primary else fg,
-                      padx=int(u * (1.4 if primary else 1)), pady=u // 3,
-                      activebackground="#8FC8FF" if primary else hot, activeforeground="#0B0D0F" if primary else fg)
-        b.pack(side="right", padx=(u // 2, 0))
-        hover(b, accent if primary else card, "#8FC8FF" if primary else hot)
-        located[key] = b
+        """Fluent's button: 32 px high, 4 px corners, at least 120 px wide; the accent one for the main action."""
+        bw, bh = max(f(120), (measure_strong if primary else measure)(text) + 2 * f(12)), control_h
+        cv = tk.Canvas(foot, width=bw, height=bh, bg=bg, highlightthickness=0, cursor="hand2")
+        cv.pack(side="right", padx=(f(8), 0))
+
+        def draw(hot_=False):
+            cv.delete("all")
+            if primary:
+                rounded(cv, 0, 0, bw, bh, f(4), accent_hot if hot_ else accent, bg)
+            else:
+                rounded(cv, 0, 0, bw, bh, f(4), hot if hot_ else card, bg, ctl, 1)
+            cv.create_text(bw / 2, bh / 2, text=text, font=strong if primary else body,
+                           fill="#0B0D0F" if primary else fg)
+
+        def release(e):
+            if 0 <= e.x < bw and 0 <= e.y < bh:
+                command()
+        draw()
+        cv.bind("<Enter>", lambda e: draw(True))
+        cv.bind("<Leave>", lambda e: draw(False))
+        cv.bind("<ButtonRelease-1>", release)
+        located[key] = cv
 
     button("done", "Done", close, primary=True)
     button("reset", "Reset to defaults", reset)
@@ -494,8 +621,13 @@ def settings_window(parent, config_path: str, apply, on_close, topmost: bool = F
     win.focus_force()
     win.update()
     fade(win, 1.0, 120)
-    log.info("settings shown: %s", " ".join(
-        f"{k}={b.winfo_rootx()},{b.winfo_rooty()},{b.winfo_width()},{b.winfo_height()}" for k, b in located.items()))
+
+    def rect(v):             # a widget, or (canvas, x, y, w, h) for part of one (a segment)
+        if isinstance(v, tuple):
+            cv, x, y, w_, h_ = v
+            return cv.winfo_rootx() + x, cv.winfo_rooty() + y, w_, h_
+        return v.winfo_rootx(), v.winfo_rooty(), v.winfo_width(), v.winfo_height()
+    log.info("settings shown: %s", " ".join("%s=%d,%d,%d,%d" % ((k,) + rect(v)) for k, v in located.items()))
     return win
 
 
