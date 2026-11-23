@@ -86,7 +86,8 @@ def label(source: str) -> str:
     """'@NASA Shorts', '@NASA videos', 'the playlist', 'the search "lofi"' for messages."""
     q = query_of(source)
     if q:
-        return f"the search \u201c{q if len(q) <= 40 else q[:39] + '\u2026'}\u201d"
+        short = q if len(q) <= 40 else q[:39] + "\u2026"   # no backslash inside an f-string: Python 3.11
+        return f"the search \u201c{short}\u201d"
     m = re.match(r"https://www\.youtube\.com/(@[^/]+|channel/[^/]+|c/[^/]+|user/[^/]+)/(\w+)$", source or "")
     if m:
         return f"{m.group(1)} {'Shorts' if m.group(2) == 'shorts' else m.group(2)}"
