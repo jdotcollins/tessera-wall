@@ -269,6 +269,356 @@ def rounded(cv, x0, y0, x1, y1, r, fill: str, bg: str, stroke: str | None = None
         cv.create_rectangle(x0 + sw, y0 + r, x1 - sw, y1 - r, fill=fill, width=0, tags=tag)
 
 
+# ---- the design language: one set of colours, sizes and controls for every window ------------------------
+# After Windows 11 (Fluent 2): 14 px body text, 12 px captions, 4 px grid, 32 px controls, 4 px corners on
+# controls and 5 px on cards, all scaled by Metrics.f to the screen. Settings, the start window, the template
+# window, the text dialogs, the wall's menu bar, Recent list and controls list are all built from these.
+BG, CARD, EDGE, WELL, CTL = "#101214", "#1A1E23", "#232830", "#121519", "#2C323A"
+FG, DIM, FAINT, ACCENT, ACCENT_HOT, HOT = "#E6E6E6", "#A3ACB6", "#5A626B", "#6CB6FF", "#8FC8FF", "#262C33"
+ON_ACCENT, DANGER, THUMB = "#0B0D0F", "#C42B1C", "#3A4048"
+
+
+class Metrics:
+    """Fluent sizes at a given text size u (screen height / 90, at least 12; 16 on a 1440p screen)."""
+
+    def __init__(self, u: int):
+        self.u = u
+        self.body, self.caption = ("Segoe UI", -self.f(14)), ("Segoe UI", -self.f(12))
+        self.strong = ("Segoe UI Semibold", -self.f(14))
+        self.subtitle, self.title = ("Segoe UI Semibold", -self.f(20)), ("Segoe UI Semibold", -self.f(28))
+        self.control_h = self.f(32)
+
+    def f(self, px):         # a Fluent size (designed around 14 px text) at this screen's text size
+        return max(1, round(px * self.u / 14))
+
+    def measure(self, widget, text: str, font=None) -> int:
+        import tkinter.font as tkfont
+        family, size = font or self.body
+        return tkfont.Font(root=widget, family=family, size=size).measure(text)
+
+
+def icon_font(widget, size: int):
+    """Windows' own icon font (Segoe Fluent Icons on 11, Segoe MDL2 Assets on 10), or None."""
+    import tkinter.font as tkfont
+    families = set(tkfont.families(widget))
+    for name in ("Segoe Fluent Icons", "Segoe MDL2 Assets"):
+        if name in families:
+            return (name, -size)
+    return None
+
+
+def metrics_for(widget) -> Metrics:
+    return Metrics(max(12, widget.winfo_screenheight() // 90))
+
+
+class Button(tk.Canvas):
+    """Fluent's button, drawn: `kind` "accent" (the main action), "standard" (outlined) or "subtle" (no fill
+    until pointed at, for bars and icons). width=None fits the text (at least 120 px, except subtle);
+    width="fill" takes the width it is given. Acts on release, like a native button; Space or Enter act
+    when it has the keyboard focus."""
+
+    def __init__(self, parent, text, command, m: Metrics, kind="standard", width=None, height=None,
+                 behind=BG, font=None, danger=False, takefocus=1, fg=None):
+        self.m, self.kind, self.text, self.command, self.fg = m, kind, text, command, fg
+        self.behind, self.danger, self.enabled = behind, danger, True
+        self.font = font or (m.strong if kind == "accent" else m.body)
+        self.fill_w = width == "fill"
+        h = height or m.control_h
+        if width is None or self.fill_w:
+            least = 0 if kind == "subtle" else m.f(120)
+            width = max(least, m.measure(parent, text, self.font) + 2 * m.f(12))
+        super().__init__(parent, width=width, height=h, bg=behind, highlightthickness=0, cursor="hand2",
+                         takefocus=takefocus)
+        self.state = {"hot": False, "down": False}
+        self.bind("<Configure>", lambda e: self.draw())
+        self.bind("<Enter>", lambda e: self._set(hot=True))
+        self.bind("<Leave>", lambda e: self._set(hot=False, down=False))
+        self.bind("<ButtonPress-1>", lambda e: self._set(down=True))
+        self.bind("<ButtonRelease-1>", self._release)
+        for key in ("<space>", "<Return>"):
+            self.bind(key, lambda e: self.invoke())
+        self.bind("<FocusIn>", lambda e: self.draw())
+        self.bind("<FocusOut>", lambda e: self.draw())
+
+    def _set(self, **kw):
+        self.state.update(kw)
+        self.draw()
+
+    def _release(self, e):
+        inside = 0 <= e.x < self.winfo_width() and 0 <= e.y < self.winfo_height()
+        self._set(down=False)
+        if inside:
+            self.invoke()
+
+    def invoke(self):
+        if self.enabled and self.command:
+            self.command()
+
+    def set_enabled(self, on: bool):
+        self.enabled = on
+        self.config(cursor="hand2" if on else "")
+        self.draw()
+
+    def set_text(self, text: str):
+        self.text = text
+        self.draw()
+
+    def draw(self):
+        w, h = self.winfo_width(), self.winfo_height()
+        if w <= 1:
+            w, h = int(self.cget("width")), int(self.cget("height"))
+        self.delete("all")
+        m, hot, r = self.m, self.state["hot"] and self.enabled, self.m.f(4)
+        focused = self.focus_get() is self
+        if self.kind == "accent":
+            fill = (ACCENT_HOT if hot else ACCENT) if self.enabled else CTL
+            rounded(self, 0, 0, w, h, r, fill, self.behind, FG if focused else None, 1 if focused else 0)
+            colour = ON_ACCENT if self.enabled else FAINT
+        elif self.kind == "standard":
+            rounded(self, 0, 0, w, h, r, HOT if hot else CARD, self.behind, FG if focused else CTL, 1)
+            colour = FG if self.enabled else FAINT
+        else:
+            if hot or focused:
+                rounded(self, 0, 0, w, h, r, (DANGER if self.danger else HOT) if hot else self.behind, self.behind,
+                        FG if focused else None, 1 if focused else 0)
+            colour = ("white" if hot and self.danger else (self.fg or FG)) if self.enabled else FAINT
+        self.create_text(w / 2, h / 2, text=self.text, font=self.font, fill=colour)
+
+
+def card_frame(parent, m: Metrics, behind=BG, click=None, min_h=None, accent_edge=False):
+    """A rounded card (Fluent's SettingsCard) as a canvas holding a frame. Returns (canvas, inner frame); put
+    content in the frame with bg=CARD. With `click`, the whole card is a button: it lightens under the
+    pointer and calls click() on release. The canvas sizes itself to the frame (at least min_h high).
+    Call canvas.wire() once the content is in: it sizes the card, and makes every part of it take the
+    pointer."""
+    pad_x, pad_y = m.f(16), m.f(8)
+    min_h = m.f(56) if min_h is None else min_h
+    cv = tk.Canvas(parent, bg=behind, highlightthickness=0, height=min_h)
+    inner = tk.Frame(cv, bg=CARD)
+    item = cv.create_window(pad_x, pad_y, anchor="nw", window=inner)
+    look = {"fill": CARD}
+
+    def redraw(e=None):
+        w_, h_ = cv.winfo_width(), cv.winfo_height()
+        cv.delete("shape")
+        rounded(cv, 0, 0, w_, h_, m.f(5), look["fill"], behind, ACCENT if accent_edge else EDGE, 1)
+        cv.itemconfig(item, width=w_ - 2 * pad_x)
+        cv.coords(item, pad_x, (h_ - inner.winfo_reqheight()) // 2)
+
+    def fit(e=None):         # a canvas does not size itself to the frame inside it: ask for that size
+        w_ = inner.winfo_reqwidth() + 2 * pad_x
+        h_ = max(min_h, inner.winfo_reqheight() + 2 * pad_y)
+        if (int(cv.cget("width")), int(cv.cget("height"))) != (w_, h_):
+            cv.config(width=w_, height=h_)
+        else:
+            redraw()
+    cv.bind("<Configure>", redraw)
+    inner.bind("<Configure>", fit)
+
+    def shade(colour):       # the card and everything on it that shares its colour
+        def walk(w):
+            try:
+                if w.cget("bg") == look["fill"]:
+                    w.config(bg=colour)
+            except tk.TclError:
+                pass
+            for c in w.winfo_children():
+                if isinstance(c, Button):
+                    c.behind = colour
+                    c.config(bg=colour)
+                    c.draw()
+                else:
+                    walk(c)
+        walk(inner)
+        look["fill"] = colour
+        redraw()
+
+    def pointer_inside():
+        x, y = cv.winfo_pointerxy()
+        w = cv.winfo_containing(x, y)
+        while w is not None:
+            if w is cv:
+                return True
+            w = w.master
+        return False
+
+    def wire():
+        inner.update_idletasks()     # size the card now, even if it is not on screen yet (it may never be,
+        fit()                        # if the window was sized before it existed)
+        if not click:
+            return
+
+        def enter(e):
+            if look["fill"] != HOT:
+                shade(HOT)
+
+        def leave(e):
+            cv.after(1, lambda: None if pointer_inside() else shade(CARD))
+
+        def release(e):
+            if pointer_inside():
+                click()
+
+        def hook(w):
+            if isinstance(w, Button):
+                return
+            w.bind("<Enter>", enter, add="+")
+            w.bind("<Leave>", leave, add="+")
+            w.bind("<ButtonRelease-1>", release, add="+")
+            w.config(cursor="hand2")
+            for c in w.winfo_children():
+                hook(c)
+        hook(cv)
+    cv.wire = wire
+    cv.shade = shade
+    return cv, inner
+
+
+def key_chip(parent, text: str, font, behind: str) -> tk.Canvas:
+    """A keyboard key, drawn as a small rounded chip (the controls list)."""
+    import tkinter.font as tkfont
+    fnt = tkfont.Font(root=parent, family=font[0], size=font[1])
+    pad, h = max(5, -font[1] // 2), int(-font[1] * 1.7)
+    w = max(h, fnt.measure(text) + 2 * pad)
+    cv = tk.Canvas(parent, width=w, height=h, bg=behind, highlightthickness=0)
+    rounded(cv, 0, 0, w, h, max(3, h // 6), CTL, behind, "#3A414A", 1)
+    cv.create_text(w / 2, h / 2, text=text, font=font, fill="white")
+    return cv
+
+
+def ask_text(parent, title: str, prompt: str, ok: str, initial: str = "", topmost: bool = False) -> str | None:
+    """Fluent's content dialog with one text box: title, prompt, OK (accent) and Cancel. Modal over `parent`;
+    returns the text, or None if cancelled. Replaces tkinter's simpledialog, which is light grey and
+    unstyled. Enter is OK, Esc is Cancel."""
+    m = metrics_for(parent)
+    win = tk.Toplevel(parent)
+    win.withdraw()
+    win.transient(parent)
+    win.title(title)
+    win.configure(bg=BG, padx=m.f(24), pady=m.f(20))
+    win.resizable(False, False)
+    answer: list = []
+    tk.Label(win, text=title, bg=BG, fg="white", font=m.subtitle).pack(anchor="w", pady=(0, m.f(12)))
+    tk.Label(win, text=prompt, bg=BG, fg=FG, font=m.body).pack(anchor="w", pady=(0, m.f(8)))
+    box_w, box_h = m.f(360), m.control_h
+    box = tk.Canvas(win, width=box_w, height=box_h, bg=BG, highlightthickness=0)
+    box.pack(anchor="w")
+    entry = tk.Entry(box, bg=WELL, fg=FG, insertbackground=FG, relief="flat", bd=0, font=m.body,
+                     highlightthickness=0, selectbackground=ACCENT, selectforeground=ON_ACCENT)
+    entry.insert(0, initial)
+
+    def draw_box(e=None):    # Fluent's text box: a well with a bottom line, accent while typing
+        box.delete("shape")
+        focused = entry.focus_get() is entry
+        rounded(box, 0, 0, box_w, box_h, m.f(4), WELL, BG, CTL, 1)
+        box.create_rectangle(m.f(4), box_h - (2 if focused else 1), box_w - m.f(4), box_h,
+                             fill=ACCENT if focused else "#8A939D", width=0, tags="shape")
+        box.tag_lower("shape")
+    box.create_window(m.f(10), box_h // 2, anchor="w", window=entry, width=box_w - 2 * m.f(10))
+    entry.bind("<FocusIn>", draw_box)
+    entry.bind("<FocusOut>", draw_box)
+    draw_box()
+    row = tk.Frame(win, bg=BG)
+    row.pack(fill="x", pady=(m.f(24), 0))
+    row.grid_columnconfigure(0, weight=1, uniform="b")
+    row.grid_columnconfigure(1, weight=1, uniform="b")
+
+    def done(text=None):
+        if text is not None:
+            answer.append(text)
+        win.grab_release()
+        win.destroy()
+    Button(row, ok, lambda: done(entry.get()), m, kind="accent", width="fill").grid(row=0, column=0, sticky="ew",
+                                                                                     padx=(0, m.f(4)))
+    Button(row, "Cancel", done, m, width="fill").grid(row=0, column=1, sticky="ew", padx=(m.f(4), 0))
+    win.bind("<Return>", lambda e: done(entry.get()))
+    win.bind("<Escape>", lambda e: done())
+    win.protocol("WM_DELETE_WINDOW", done)
+    win.update_idletasks()
+    w, h = win.winfo_reqwidth(), win.winfo_reqheight()
+    px, py = parent.winfo_rootx(), parent.winfo_rooty()
+    pw, ph = parent.winfo_width(), parent.winfo_height()
+    if pw < w or ph < h:                                 # a slim bar as parent: centre on its screen instead
+        px, py, pw, ph = monitor_under_cursor()
+    win.geometry(f"+{px + (pw - w) // 2}+{py + (ph - h) // 3}")
+    win.deiconify()
+    dark_title_bar(win)
+    if topmost:
+        win.attributes("-topmost", True)
+    win.lift()
+    win.update()
+    win.grab_set()
+    entry.focus_force()
+    entry.select_range(0, "end")
+    log.info("text dialog shown: %s", title)
+    parent.wait_window(win)
+    return answer[0] if answer else None
+
+
+def popup_list(parent, x: int, y: int, entries: list, m: Metrics, on_close=None):
+    """A themed drop-down list at screen x, y (Fluent's menu flyout): entries are (text, mark, action),
+    mark a short glyph shown before the text (or ""). Picking one runs its action; a click elsewhere or Esc
+    closes it. Returns the window."""
+    win = tk.Toplevel(parent)
+    win.withdraw()
+    win.overrideredirect(True)
+    win.configure(bg=CARD, padx=m.f(4), pady=m.f(4))
+    closed = [False]
+
+    def close(then=None):
+        if closed[0]:
+            return
+        closed[0] = True
+        try:
+            win.grab_release()
+        except tk.TclError:
+            pass
+        win.destroy()
+        if then:
+            then()
+        if on_close:
+            on_close()
+    mark_w = max([m.measure(win, mk) for _, mk, _ in entries if mk] + [0])
+    for text, mark, action in entries:
+        label = (f"{mark}  " if mark else "") + text
+        b = Button(win, label, lambda a=action: close(a), m, kind="subtle", width="fill", behind=CARD, takefocus=0)
+        b.config(width=max(int(b.cget("width")), m.measure(win, text) + mark_w + 3 * m.f(12)))
+        b.draw = (lambda b=b, mark=mark, text=text: _menu_row_draw(b, mark, text, mark_w))
+        b.pack(fill="x")
+    win.bind("<Escape>", lambda e: close())
+
+    def outside(e):          # with the grab on, clicks anywhere come here
+        if not (0 <= e.x_root - win.winfo_rootx() < win.winfo_width()
+                and 0 <= e.y_root - win.winfo_rooty() < win.winfo_height()):
+            close()
+    win.bind("<ButtonPress-1>", outside, add="+")
+    win.update_idletasks()
+    win.geometry(f"{max(win.winfo_reqwidth(), m.f(240))}x{win.winfo_reqheight()}+{x}+{y}")
+    win.deiconify()
+    win.attributes("-topmost", True)
+    round_corners(win)
+    win.lift()
+    win.update()
+    win.grab_set()
+    win.focus_force()
+    return win
+
+
+def _menu_row_draw(b: "Button", mark: str, text: str, mark_w: int):
+    """A popup_list row: left-aligned, the mark (a star) in its own column."""
+    w, h = b.winfo_width(), b.winfo_height()
+    if w <= 1:
+        w, h = int(b.cget("width")), int(b.cget("height"))
+    b.delete("all")
+    if b.state["hot"]:
+        rounded(b, 0, 0, w, h, b.m.f(4), HOT, b.behind)
+    x = b.m.f(12)
+    if mark_w:
+        b.create_text(x, h / 2, text=mark, font=b.m.body, fill=ACCENT, anchor="w")
+        x += mark_w + b.m.f(10)
+    b.create_text(x, h / 2, text=text, font=b.m.body, fill=FG, anchor="w")
+
+
 def settings_window(parent, config_path: str, apply, on_close, topmost: bool = False) -> tk.Toplevel:
     """Build and show the settings window. Each change is written to the settings file at once and
     `apply(names)` is called, so the wall behind it updates while the user watches.
@@ -281,23 +631,17 @@ def settings_window(parent, config_path: str, apply, on_close, topmost: bool = F
     Its widgets are taken out of the app-wide key and mouse bindings (bindtag "all"): otherwise Space
     on a switch would also pause a video, and clicks would reach the wall's handlers.
     """
-    import tkinter.font as tkfont
-    u = max(12, parent.winfo_screenheight() // 90)
-
-    def f(px):               # a Fluent size (designed around 14 px text) at this screen's text size u
-        return max(1, round(px * u / 14))
-
-    bg, card, edge, well, ctl = "#101214", "#1A1E23", "#232830", "#121519", "#2C323A"
-    fg, dim, faint, accent, accent_hot, hot = "#E6E6E6", "#A3ACB6", "#5A626B", "#6CB6FF", "#8FC8FF", "#262C33"
-    body, caption = ("Segoe UI", -f(14)), ("Segoe UI", -f(12))
-    strong, title_font = ("Segoe UI Semibold", -f(14)), ("Segoe UI Semibold", -f(28))
+    m = metrics_for(parent)
+    u, f = m.u, m.f
+    bg, card, edge, well, ctl = BG, CARD, EDGE, WELL, CTL
+    fg, dim, faint, accent, accent_hot, hot = FG, DIM, FAINT, ACCENT, ACCENT_HOT, HOT
+    body, caption, strong, title_font = m.body, m.caption, m.strong, m.title
     win = tk.Toplevel(parent)
     win.withdraw()
     win.title("Tessera Wall settings")
     win.configure(bg=bg, padx=f(32), pady=f(24))
     win.resizable(False, False)
-    measure = tkfont.Font(root=win, family="Segoe UI", size=-f(14)).measure
-    measure_strong = tkfont.Font(root=win, family="Segoe UI Semibold", size=-f(14)).measure
+    measure = lambda text: m.measure(win, text)
 
     items = [_split(i) for i in SETTINGS_UI]
     seg_pad = f(12)
@@ -357,27 +701,8 @@ def settings_window(parent, config_path: str, apply, on_close, topmost: bool = F
     def card_row(label, opts, click=None):
         """One setting: a rounded card with its title (and description) on the left; returns the frame on the
         right for the control, and the card itself."""
-        cv = tk.Canvas(columns[-1], bg=bg, highlightthickness=0, height=card_min_h)
+        cv, inner = card_frame(columns[-1], m, min_h=card_min_h)
         cv.pack(fill="x", pady=(0, f(4)))
-        inner = tk.Frame(cv, bg=card)
-        item = cv.create_window(card_pad_x, card_pad_y, anchor="nw", window=inner)
-
-        def redraw(e=None):
-            w_, h_ = cv.winfo_width(), cv.winfo_height()
-            cv.delete("shape")
-            rounded(cv, 0, 0, w_, h_, f(5), card, bg, edge, 1)
-            cv.itemconfig(item, width=w_ - 2 * card_pad_x)
-            cv.coords(item, card_pad_x, (h_ - inner.winfo_reqheight()) // 2)
-
-        def fit(e=None):         # a canvas does not size itself to the frame inside it: ask for that size
-            w_ = inner.winfo_reqwidth() + 2 * card_pad_x
-            h_ = max(card_min_h, inner.winfo_reqheight() + 2 * card_pad_y)
-            if (int(cv.cget("width")), int(cv.cget("height"))) != (w_, h_):
-                cv.config(width=w_, height=h_)
-            else:
-                redraw()
-        cv.bind("<Configure>", redraw)
-        inner.bind("<Configure>", fit)
         inner.grid_columnconfigure(0, weight=1)
         left = tk.Frame(inner, bg=card)
         left.grid(row=0, column=0, sticky="w")
@@ -390,6 +715,7 @@ def settings_window(parent, config_path: str, apply, on_close, topmost: bool = F
             hint.pack(anchor="w")
         right = tk.Frame(inner, bg=card)
         right.grid(row=0, column=1, sticky="e", padx=(f(16), 0))
+        cv.wire()
         if opts.get("clean"):
             greyed.append((lab, hint))
         if click:                     # the whole card toggles, not only the switch
@@ -418,9 +744,9 @@ def settings_window(parent, config_path: str, apply, on_close, topmost: bool = F
             cv.create_rectangle(pad, mid - t, sw_ - pad, mid + t, fill=ctl, width=0)
             cv.create_rectangle(pad, mid - t, x, mid + t, fill=accent, width=0)
             r_ = pad                                       # Fluent's thumb: a dark disc with an accent dot
-            rounded(cv, x - r_, mid - r_, x + r_, mid + r_, r_, "#3A4048", card)
+            rounded(cv, x - r_, mid - r_, x + r_, mid + r_, r_, THUMB, card)
             r2 = max(2, r_ * 5 // 9)
-            rounded(cv, x - r2, mid - r2, x + r2, mid + r2, r2, accent, "#3A4048")
+            rounded(cv, x - r2, mid - r2, x + r2, mid + r2, r2, accent, THUMB)
             shown.config(text=unit.format(int(value) if whole else value))
 
         def pick(e):
@@ -569,28 +895,9 @@ def settings_window(parent, config_path: str, apply, on_close, topmost: bool = F
     status = tk.Label(foot, text="Changes are saved as you make them.", bg=bg, fg=dim, font=caption)
 
     def button(key, text, command, primary=False):
-        """Fluent's button: 32 px high, 4 px corners, at least 120 px wide; the accent one for the main action."""
-        bw, bh = max(f(120), (measure_strong if primary else measure)(text) + 2 * f(12)), control_h
-        cv = tk.Canvas(foot, width=bw, height=bh, bg=bg, highlightthickness=0, cursor="hand2")
-        cv.pack(side="right", padx=(f(8), 0))
-
-        def draw(hot_=False):
-            cv.delete("all")
-            if primary:
-                rounded(cv, 0, 0, bw, bh, f(4), accent_hot if hot_ else accent, bg)
-            else:
-                rounded(cv, 0, 0, bw, bh, f(4), hot if hot_ else card, bg, ctl, 1)
-            cv.create_text(bw / 2, bh / 2, text=text, font=strong if primary else body,
-                           fill="#0B0D0F" if primary else fg)
-
-        def release(e):
-            if 0 <= e.x < bw and 0 <= e.y < bh:
-                command()
-        draw()
-        cv.bind("<Enter>", lambda e: draw(True))
-        cv.bind("<Leave>", lambda e: draw(False))
-        cv.bind("<ButtonRelease-1>", release)
-        located[key] = cv
+        b = Button(foot, text, command, m, kind="accent" if primary else "standard")
+        b.pack(side="right", padx=(f(8), 0))
+        located[key] = b
 
     button("done", "Done", close, primary=True)
     button("reset", "Reset to defaults", reset)
@@ -673,8 +980,7 @@ def start_window(last_session: list, incoming: queue.Queue, checker: "updates.Ch
             status.config(text="No videos found in that selection.")
 
     def search():
-        from tkinter import simpledialog
-        words = simpledialog.askstring("Search YouTube", "Search YouTube for:", parent=root)
+        words = ask_text(root, "Search YouTube", "Search for:", "Search")
         if words and words.strip():
             import sources
             finish([sources.search_url(words)])
@@ -701,13 +1007,16 @@ def start_window(last_session: list, incoming: queue.Queue, checker: "updates.Ch
                 chosen_plan.append(plan)
                 close()
 
-    tk.Label(root, text="Tessera Wall", bg=bg, fg="white", font=font(2.0, True)).pack(anchor="w")
-    tk.Label(root, text="Play several videos at once, side by side.", bg=bg, fg=dim, font=font(1.05)
-             ).pack(anchor="w", pady=(0, u))
+    m = metrics_for(root)
+    f = m.f
+    tk.Label(root, text="Tessera Wall", bg=bg, fg="white", font=m.title).pack(anchor="w")
+    tk.Label(root, text="Play several videos at once, side by side.", bg=bg, fg=DIM, font=m.body
+             ).pack(anchor="w", pady=(0, f(16)))
     can_drop = hasattr(root, "drop_target_register")
     drop = tk.Canvas(root, bg=bg, highlightthickness=0, cursor="hand2", height=u * 8)
-    drop.pack(fill="both", expand=True, pady=(0, u))
+    drop.pack(fill="both", expand=True, pady=(0, f(12)))
     zone = {"state": "idle"}
+    glyph = icon_font(root, f(28))
 
     def draw_zone(state=None):
         zone["state"] = state or zone["state"]
@@ -717,13 +1026,16 @@ def start_window(last_session: list, incoming: queue.Queue, checker: "updates.Ch
         lit = zone["state"] == "drag"
         warm = zone["state"] == "hover"
         drop.delete("all")
-        drop.create_rectangle(1, 1, w_ - 2, h_ - 2, dash=(6, 5), width=2,
-                              outline=accent if lit else ("#55606C" if warm else "#3A424C"),
-                              fill="#18263A" if lit else ("#1F242B" if warm else panel))
-        drop.create_text(w_ // 2, h_ // 2 - u // 2, fill=accent if lit else fg, font=font(1.3),
+        rounded(drop, 0, 0, w_, h_, f(8), "#16202C" if lit else (HOT if warm else CARD), bg,
+                ACCENT if lit else ("#3A424C" if warm else EDGE), 2 if lit else 1)
+        top = h_ // 2 - (f(22) if glyph else f(10))
+        if glyph:                                          # an upload arrow, from Windows' icon font
+            drop.create_text(w_ // 2, top - f(4), text="", font=glyph, fill=ACCENT if lit else DIM)
+        drop.create_text(w_ // 2, top + (f(30) if glyph else 0), fill=ACCENT if lit else FG,
+                         font=("Segoe UI Semibold", -f(16)),
                          text="Release to play" if lit else
                          ("Drop videos, folders or links here" if can_drop else "Choose what to play"))
-        drop.create_text(w_ // 2, h_ // 2 + u, fill=dim, font=font(0.9),
+        drop.create_text(w_ // 2, top + (f(54) if glyph else f(24)), fill=DIM, font=m.caption,
                          text="" if lit else "or click to choose videos  ·  Ctrl+V pastes a link")
 
     drop.bind("<Configure>", lambda e: draw_zone())
@@ -731,49 +1043,70 @@ def start_window(last_session: list, incoming: queue.Queue, checker: "updates.Ch
     drop.bind("<Leave>", lambda e: draw_zone("idle") if zone["state"] != "drag" else None)
     drop.bind("<Button-1>", lambda e: pick_files())
     buttons = {}
+    busy = [False]                                         # a template is being read: ignore clicks
 
-    def button(key, text, command, primary=False, parent=None, column=None):
-        b = tk.Button(parent or root, text=text, command=command, font=font(1.05 if parent is None else 0.95, primary),
-                      relief="flat", bd=0, bg=accent if primary else panel, fg="#0B0D0F" if primary else fg,
-                      cursor="hand2", activebackground="#8FC8FF" if primary else "#2A3038",
-                      activeforeground="#0B0D0F" if primary else fg, pady=u // 2)
-        if column is None:
-            b.pack(fill="x", pady=(0, u // 2))
-        else:
-            b.grid(row=0, column=column, sticky="ew", padx=(0 if column == 0 else u // 4, 0))
-        hover(b, accent if primary else panel, "#8FC8FF" if primary else "#2A3038")
-        buttons[key] = b
-        return b
-
-    button("videos", "Choose videos…", pick_files, primary=True).focus_set()
+    first = Button(root, "Choose videos…", pick_files, m, kind="accent", width="fill", height=f(40))
+    first.pack(fill="x", pady=(0, f(8)))
+    first.focus_set()
+    buttons["videos"] = first
     trio = tk.Frame(root, bg=bg)             # the other ways in, side by side
-    trio.pack(fill="x", pady=(0, u // 2))
+    trio.pack(fill="x")
     for col, (key, text, command) in enumerate((("folder", "Choose a folder…", pick_folder),
                                                 ("search", "Search YouTube…", search),
                                                 ("template", "Use a template…", pick_template))):
         trio.grid_columnconfigure(col, weight=1, uniform="trio")
-        button(key, text, command, parent=trio, column=col)
-    if last_session:
-        n = len(last_session)
-        button("resume", f"Reopen last session ({n} video{'s' if n != 1 else ''})", lambda: finish(last_session))
-    for i, (name, items) in enumerate(list_walls(config_path) if config_path else []):
-        n = len(items)
-        button(f"wall{i}", f"Open \u201c{name}\u201d ({n} video{'s' if n != 1 else ''})",
-               lambda items=items: finish(items))
+        b = Button(trio, text, command, m, width="fill", height=f(36))
+        b.grid(row=0, column=col, sticky="ew", padx=(0 if col == 0 else f(4), 0))
+        buttons[key] = b
+
+    def heading(text):
+        lab = tk.Label(root, text=text, bg=bg, fg=FG, font=m.strong)
+        lab.pack(anchor="w", pady=(f(16), f(8)))
+        return lab
+
+    chevron = icon_font(root, f(12))
+
+    def list_card(key, title, detail, action):
+        """A clickable card: title and grey detail on the left, a chevron on the right (Fluent's
+        clickable SettingsCard)."""
+        cv, inner = card_frame(root, m, click=lambda: None if busy[0] else action(), min_h=f(48))
+        cv.pack(fill="x", pady=(0, f(4)))
+        inner.grid_columnconfigure(0, weight=1)
+        left = tk.Frame(inner, bg=CARD)
+        left.grid(row=0, column=0, sticky="w")
+        tk.Label(left, text=title, bg=CARD, fg=FG, font=m.body, anchor="w").pack(anchor="w")
+        if detail:
+            tk.Label(left, text=detail, bg=CARD, fg=DIM, font=m.caption, anchor="w").pack(anchor="w")
+        tk.Label(inner, text="" if chevron else "›", bg=CARD, fg=DIM,
+                 font=chevron or m.subtitle).grid(row=0, column=1, sticky="e")
+        cv.wire()
+        buttons[key] = cv
+        return cv
+
+    def videos(n):
+        return f"{n} video{'s' if n != 1 else ''}"
 
     # Templates whose every slot names a folder need no folder chosen: one click opens them.
     import templates as T
     ready = [t for t in (T.load_templates(T.user_file_path(config_path))[0] if config_path else [])
              if not t.needs_chosen_folder][:4]
+    walls = list_walls(config_path) if config_path else []
+    if last_session or walls or ready:
+        heading("Open again")
+    if last_session:
+        list_card("resume", "Last session", videos(len(last_session)), lambda: finish(last_session))
+    for i, (name, items) in enumerate(walls):
+        list_card(f"wall{i}", name, f"Saved wall · {videos(len(items))}", lambda items=items: finish(items))
 
     def play_ready(t):
         import threading
         import probe
         state: dict = {}
-        status.config(text=f"Reading video shapes for \u201c{t.name}\u201d\u2026")
+        status.config(text=f"Reading video shapes for “{t.name}”…")
+        busy[0] = True
         for b in buttons.values():
-            if isinstance(b, tk.Button):
-                b.config(state="disabled")
+            if isinstance(b, Button):
+                b.set_enabled(False)
 
         def work():
             read = lambda files: probe.probe(files, probe.cache_path_for(config_path))
@@ -792,76 +1125,79 @@ def start_window(last_session: list, incoming: queue.Queue, checker: "updates.Ch
                 close()
             else:
                 status.config(text=plan.message[:90])
+                busy[0] = False
                 for b in buttons.values():
-                    if isinstance(b, tk.Button):
-                        b.config(state="normal")
+                    if isinstance(b, Button):
+                        b.set_enabled(True)
         threading.Thread(target=work, daemon=True).start()
         jobs.append(root.after(100, wait))
 
     for i, t in enumerate(ready):
-        button(f"tpl{i}", f"Play template \u201c{t.name}\u201d ({t.count} videos)", lambda t=t: play_ready(t))
+        list_card(f"tpl{i}", f"Template “{t.name}”", videos(t.count), lambda t=t: play_ready(t))
 
     # Recent and pinned channels, playlists and searches: one click opens a wall of them. The star pins one
     # (pinned ones stay listed, first); the cross forgets one.
     import sources
     remembered = sources.recent(config_path, limit=sources.RECENT_SHOWN) if config_path else []
-    heading = tk.Label(root, text="CHANNELS AND SEARCHES", bg=bg, fg=dim, font=font(0.8, True))
-    heading_h = 0
-    if remembered:
-        heading.pack(anchor="w", pady=(u // 2, u // 3), padx=(u // 8, 0))
-        heading_h = heading.winfo_reqheight() + u // 2 + u // 3
+    sources_heading = heading("Channels and searches") if remembered else None
+    heading_h = (sources_heading.winfo_reqheight() + f(24)) if sources_heading else 0
+    star_font = icon_font(root, f(14))
 
     def recent_row(i, d):
-        row = tk.Frame(root, bg=panel)
-        row.pack(fill="x", pady=(0, u // 4))
         src = d["source"]
-        b = tk.Button(row, text=sources.menu_name(src, d.get("title")), anchor="w",
-                      command=lambda: (log.info("start window recent picked: %s", src), finish([src])),
-                      font=font(0.95), relief="flat", bd=0, bg=panel, fg=fg, cursor="hand2", padx=u // 2,
-                      activebackground="#2A3038", activeforeground=fg, pady=u // 4)
-        b.pack(side="left", fill="x", expand=True)
-        hover(b, panel, "#2A3038")
-        pin = tk.Label(row, bg=panel, font=font(1.05), cursor="hand2", padx=u // 2)
-        cross = tk.Label(row, text="\u2715", bg=panel, fg=dim, font=font(0.8), cursor="hand2", padx=u // 2)
-        cross.pack(side="right", fill="y")
-        pin.pack(side="right", fill="y")
+
+        def open_it():
+            if not busy[0]:
+                log.info("start window recent picked: %s", src)
+                finish([src])
+        row, inner = card_frame(root, m, min_h=f(48), click=open_it)
+        row.pack(fill="x", pady=(0, f(4)))
+        inner.grid_columnconfigure(0, weight=1)
+        tk.Label(inner, text=sources.menu_name(src, d.get("title")), bg=CARD, fg=FG, font=m.body, anchor="w"
+                 ).grid(row=0, column=0, sticky="w")
         state = {"pinned": bool(d.get("pinned"))}
+        icon = f(32)
 
-        def draw_pin():
-            pin.config(text="\u2605" if state["pinned"] else "\u2606", fg=accent if state["pinned"] else dim)
+        def star_text():
+            if star_font:                                  # FavoriteStarFill / FavoriteStar
+                return "" if state["pinned"] else ""
+            return "★" if state["pinned"] else "☆"
 
-        def toggle(e=None):
+        def toggle():
             state["pinned"] = not state["pinned"]
             sources.set_pinned(config_path, src, state["pinned"])
             log.info("start window %s %s", "pinned" if state["pinned"] else "unpinned", src)
-            draw_pin()
+            pin.fg = ACCENT if state["pinned"] else DIM
+            pin.set_text(star_text())
 
-        def drop_row(e=None):
+        def drop_row():
             sources.forget(config_path, src)
             log.info("start window forgot %s", src)
             # Shrink the window by the row, so the drop zone (which takes spare room) doesn't grow and
             # push the rest of the list down under the pointer. The heading goes with the last row.
-            gone = row.winfo_height() + u // 4
+            gone = row.winfo_height() + f(4)
             row.destroy()
             for key in (f"recent{i}", f"pin{i}", f"forget{i}"):
                 buttons.pop(key, None)                 # gone: nothing may configure them any more
-            if not any(k.startswith("recent") for k in buttons):
-                heading.destroy()
+            if not any(k.startswith("recent") for k in buttons) and sources_heading is not None:
+                sources_heading.destroy()
                 gone += heading_h
             root.geometry(f"{w}x{max(1, root.winfo_height() - gone)}")
 
-        draw_pin()
-        pin.bind("<ButtonRelease-1>", toggle)              # on release, like a button
-        cross.bind("<ButtonRelease-1>", drop_row)
-        for lbl in (pin, cross):
-            hover(lbl, panel, "#2A3038")
-        buttons[f"recent{i}"], buttons[f"pin{i}"], buttons[f"forget{i}"] = b, pin, cross
+        pin = Button(inner, star_text(), toggle, m, kind="subtle", width=icon, height=icon, behind=CARD,
+                     font=star_font or m.body, fg=ACCENT if state["pinned"] else DIM, takefocus=0)
+        pin.grid(row=0, column=1, padx=(0, f(2)))
+        cross = Button(inner, "" if star_font else "✕", drop_row, m, kind="subtle", width=icon,
+                       height=icon, behind=CARD, font=icon_font(root, f(12)) or m.caption, fg=DIM, takefocus=0)
+        cross.grid(row=0, column=2)
+        row.wire()
+        buttons[f"recent{i}"], buttons[f"pin{i}"], buttons[f"forget{i}"] = row, pin, cross
 
     for i, d in enumerate(remembered):
         recent_row(i, d)
     footer = tk.Frame(root, bg=bg)
-    footer.pack(fill="x", pady=(u // 2, 0))
-    status = tk.Label(footer, text="In the wall: H shows the controls, Esc exits.", bg=bg, fg=dim, font=font(0.9))
+    footer.pack(fill="x", pady=(f(12), 0))
+    status = tk.Label(footer, text="In the wall: H shows the controls, Esc exits.", bg=bg, fg=DIM, font=m.caption)
     status.pack(side="left")
     open_settings: list = []
 
@@ -870,9 +1206,8 @@ def start_window(last_session: list, incoming: queue.Queue, checker: "updates.Ch
             open_settings.append(settings_window(root, config_path, lambda names: C.load(config_path),
                                                  lambda: open_settings.clear()))
 
-    settings_link = tk.Label(footer, text="Settings", bg=bg, fg=accent, font=font(0.9, True), cursor="hand2")
+    settings_link = Button(footer, "Settings", show_settings, m, kind="subtle")
     settings_link.pack(side="right")
-    settings_link.bind("<Button-1>", lambda e: show_settings())
     buttons["settings"] = settings_link
 
     if can_drop:
@@ -928,17 +1263,22 @@ def start_window(last_session: list, incoming: queue.Queue, checker: "updates.Ch
         root.geometry(f"{w}x{max(h, root.winfo_reqheight())}")
 
     def show_update(found):
-        link = tk.Label(root, text=f"Tessera Wall {found['version']} is available – click here to download it",
-                        bg=bg, fg=accent, font=font(0.95, True), cursor="hand2")
-        link.pack(anchor="w", pady=(u // 3, 0))
-        link.bind("<Button-1>", lambda e: updates.open_release_page(found["url"]))
+        """Fluent's info bar: a card with an accent edge, the news, and a Download button."""
+        bar, inner = card_frame(root, m, accent_edge=True, min_h=f(48))
+        bar.pack(fill="x", pady=(f(12), 0))
+        inner.grid_columnconfigure(0, weight=1)
+        tk.Label(inner, text=f"Tessera Wall {found['version']} is available.", bg=CARD, fg=FG, font=m.body,
+                 anchor="w").grid(row=0, column=0, sticky="w")
+        link = Button(inner, "Download", lambda: updates.open_release_page(found["url"]), m, kind="accent",
+                      behind=CARD)
+        link.grid(row=0, column=1, sticky="e")
         root.update_idletasks()
-        root.geometry(f"{w}x{root.winfo_height() + u * 2}")  # make room without moving the window
+        root.geometry(f"{w}x{root.winfo_height() + bar.winfo_reqheight() + f(12)}")  # room, window stays put
         update_link.append(link)
 
-        def report():   # once Windows has resized the window; before that the link reads 0,0 1x1
+        def report():   # once the button is on screen; a drawn button has its width before it has a place
             try:
-                if link.winfo_width() <= 1:
+                if not link.winfo_viewable() or link.winfo_rootx() == link.winfo_rooty() == 0:
                     root.after(30, report)
                     return
             except tk.TclError:          # the window was closed meanwhile
@@ -1010,11 +1350,12 @@ def template_window(folders: list, config_path: str | None, parent=None) -> "tem
     name = ", ".join(os.path.basename(os.path.normpath(f)) or f for f in folders)
     state = {"done": 0, "total": len(paths), "shapes": None, "per_template": {}}
 
-    tk.Label(win, text="Choose a template", bg=bg, fg="white", font=font(1.6, True)).pack(anchor="w")
-    tk.Label(win, text=f"{name} – {len(paths)} video{'s' if len(paths) != 1 else ''}", bg=bg, fg=dim,
-             font=font(1.0), wraplength=u * 36, justify="left").pack(anchor="w", pady=(0, u))
-    status = tk.Label(win, text="Reading video shapes…", bg=bg, fg=dim, font=font(0.95))
-    status.pack(anchor="w", pady=(0, u // 2))
+    m = metrics_for(win)
+    tk.Label(win, text="Choose a template", bg=bg, fg="white", font=m.title).pack(anchor="w")
+    tk.Label(win, text=f"{name} – {len(paths)} video{'s' if len(paths) != 1 else ''}", bg=bg, fg=DIM,
+             font=m.body, wraplength=u * 36, justify="left").pack(anchor="w", pady=(0, m.f(16)))
+    status = tk.Label(win, text="Reading video shapes…", bg=bg, fg=DIM, font=m.caption)
+    status.pack(anchor="w", pady=(0, m.f(8)))
     body = tk.Frame(win, bg=bg)
     body.pack(fill="x")
     located: dict = {}
@@ -1044,18 +1385,26 @@ def template_window(folders: list, config_path: str | None, parent=None) -> "tem
                  f" ({plan.message})" if plan.message else "")
         close(plan)
 
+    chevron = icon_font(win, m.f(12))
+
     def entry(key, title, detail, command, enabled=True, primary=False):
-        normal = accent if primary else panel
-        b = tk.Button(body, text=f"{title}   ·   {detail}" if detail else title, font=font(1.0, primary),
-                      relief="flat", bd=0, anchor="w", padx=u, pady=u // 2, cursor="hand2" if enabled else "",
-                      bg=normal, fg="#0B0D0F" if primary else (fg if enabled else "#5C6670"),
-                      activebackground="#8FC8FF" if primary else "#2A3038",
-                      activeforeground="#0B0D0F" if primary else fg,
-                      state="normal" if enabled else "disabled", disabledforeground="#5C6670", command=command)
-        b.pack(fill="x", pady=(0, u // 3))
+        """A template as a clickable card: name, how many videos it gets here, a chevron. The best fit,
+        the default, has an accent edge; a template with no matching videos here is greyed and inert."""
+        cv, inner = card_frame(body, m, click=command if enabled else None, min_h=m.f(48), accent_edge=primary)
+        cv.pack(fill="x", pady=(0, m.f(4)))
+        inner.grid_columnconfigure(0, weight=1)
+        left = tk.Frame(inner, bg=CARD)
+        left.grid(row=0, column=0, sticky="w")
+        tk.Label(left, text=title, bg=CARD, fg=FG if enabled else FAINT, font=m.strong if primary else m.body,
+                 anchor="w").pack(anchor="w")
+        if detail:
+            tk.Label(left, text=detail, bg=CARD, fg=DIM if enabled else FAINT, font=m.caption, anchor="w"
+                     ).pack(anchor="w")
         if enabled:
-            hover(b, normal, "#8FC8FF" if primary else "#2A3038")
-        located[key] = b
+            tk.Label(inner, text="\uE76C" if chevron else "\u203a", bg=CARD, fg=DIM,
+                     font=chevron or m.subtitle).grid(row=0, column=1, sticky="e")
+        cv.wire()
+        located[key] = cv
 
     def build():
         shapes = state["shapes"]
@@ -1076,6 +1425,8 @@ def template_window(folders: list, config_path: str | None, parent=None) -> "tem
             entry(f"t{i}", t.name, detail, lambda t=t, own=own: choose(lambda: T.plan(t, shapes, folder_shapes=own)),
                   enabled=got > 0)
         win.update_idletasks()
+        for _ in range(3):                       # the cards size themselves to their content first; each
+            win.update()                         # resize is another layout pass
         place()
         win.update()
         for key, b in located.items():           # positions, so tests can click the real buttons

@@ -214,6 +214,17 @@ folder on the development PC still has the old name; nothing depends on it.
   names become key chips. **When a key or gesture changes, update `HELP_SECTIONS` and the README.**
   `-topmost` must be set after the window is mapped, and `root.focus_force()` must not be called after
   it (it raises the wall over the list; use `focus_set`).
+- Design language: every window is built from the shared pieces at the top of `ui.py`, after Windows 11
+  (Fluent 2): the colour tokens (`BG`, `CARD`, `ACCENT`...), `Metrics` (14 px text, 12 px captions, 32 px
+  controls, the 4 px grid, scaled to the screen by `f()`), `rounded()` for smooth corners, `Button`
+  (accent, standard or subtle; acts on release, Space/Enter when focused), `card_frame()` (a rounded
+  card, optionally clickable with a hover shade and a chevron), `ask_text()` (the themed text dialog
+  that replaced tkinter's `simpledialog` for Search YouTube and Save wall), `popup_list()` (the Recent
+  list, replacing a native `tk.Menu`) and `key_chip()` (the controls list). Icons come from Windows'
+  icon font (`icon_font()`: Segoe Fluent Icons, or Segoe MDL2 Assets on Windows 10), with plain-text
+  fallbacks. Only the native file and folder pickers and the fatal-error box are left unstyled.
+  A card sizes itself in `wire()`: one first laid out below a window's edge would otherwise never get
+  its real height. **Use these for any new window or control rather than plain tk widgets.**
 - Look and feel (checked by `tests/look_test.py`, `start_test.py`, `settings_test.py` and screenshots):
   - Gutters and focus outline: each tile's frame is placed `TILE_GAP // 2` px inside its layout rect
     (`Wall.animate`); the layout maths and logged rects are unchanged. `Wall.ring`, a blue frame below

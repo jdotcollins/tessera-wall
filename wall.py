@@ -15,7 +15,6 @@ from ctypes import wintypes
 from dataclasses import dataclass, field
 from tkinter import filedialog
 from tkinter import messagebox
-from tkinter import simpledialog
 
 from ipc import MpvIpc
 from layout import Rect
@@ -32,7 +31,8 @@ import resources
 import sources
 import templates
 import ytdlp
-from ui import fade, hover, paste_async, round_corners, settings_window
+from ui import (BG, CTL, DIM, FG, Button, ask_text, fade, hover, key_chip, metrics_for, paste_async, popup_list,
+                round_corners, settings_window)
 from winapi import GA_ROOT, pictures_folder, user32
 
 log = logging.getLogger("tesserawall")
@@ -884,28 +884,28 @@ class Wall:
             log.info("help hidden")
             return
         size = max(13, self.H // 64)                     # pixels; scales with the monitor
-        bg, chip, dim, accent, pad = "#101214", "#2A3038", "#9AA4AF", "#6CB6FF", size * 2
+        bg, pad = BG, size * 2
+        body, strong = ("Segoe UI", -size), ("Segoe UI Semibold", -size)
         win = tk.Toplevel(self.root)
         win.withdraw()                                   # build it hidden, then map it once, on top
         win.overrideredirect(True)
         win.configure(bg=bg, padx=pad, pady=int(pad * 0.8))
-        tk.Label(win, text="Tessera Wall controls", bg=bg, fg="white", font=("Segoe UI", -int(size * 1.5), "bold")
+        tk.Label(win, text="Controls", bg=bg, fg="white", font=("Segoe UI Semibold", -int(size * 1.45))
                  ).grid(row=0, column=0, columnspan=3, sticky="w", pady=(0, size // 2))
         sections = dict(HELP_SECTIONS)
 
         def keys_cell(parent, keys):
             cell = tk.Frame(parent, bg=bg)
             if isinstance(keys, str):                    # a mouse action, in words
-                tk.Label(cell, text=keys, bg=bg, fg="white", font=("Segoe UI", -size, "bold")).pack(side="left")
+                tk.Label(cell, text=keys, bg=bg, fg="white", font=strong).pack(side="left")
                 return cell
             for i, alt in enumerate(keys):
                 if i:
-                    tk.Label(cell, text="/", bg=bg, fg=dim, font=("Segoe UI", -size)).pack(side="left", padx=2)
-                for j, k in enumerate(alt.split("+")):
+                    tk.Label(cell, text="/", bg=bg, fg=DIM, font=body).pack(side="left", padx=3)
+                for j, k in enumerate([alt] if alt == "+" else alt.split("+")):   # "+" is a key itself
                     if j:
-                        tk.Label(cell, text="+", bg=bg, fg=dim, font=("Segoe UI", -size)).pack(side="left", padx=2)
-                    tk.Label(cell, text=k, bg=chip, fg="white", font=("Segoe UI", -int(size * 0.85), "bold"),
-                             padx=max(4, size // 3), pady=0).pack(side="left")
+                        tk.Label(cell, text="+", bg=bg, fg=DIM, font=body).pack(side="left", padx=3)
+                    key_chip(cell, k, ("Segoe UI Semibold", -int(size * 0.8)), bg).pack(side="left")
             return cell
 
         for col, titles in enumerate(HELP_COLUMNS):
@@ -915,13 +915,13 @@ class Wall:
                 tk.Frame(win, bg=bg, width=pad * 2).grid(row=1, column=1)      # space between the columns
             r = 0
             for title in titles:
-                tk.Label(column, text=title.upper(), bg=bg, fg=accent, font=("Segoe UI", -int(size * 0.8), "bold")
+                tk.Label(column, text=title, bg=bg, fg=FG, font=strong
                          ).grid(row=r, column=0, columnspan=2, sticky="w", pady=(size if r else 0, size // 3))
                 r += 1
                 for keys, action in sections[title]:
-                    keys_cell(column, keys).grid(row=r, column=0, sticky="w", padx=(0, size), pady=2)
-                    tk.Label(column, text=action, bg=bg, fg="#E6E6E6", font=("Segoe UI", -size)
-                             ).grid(row=r, column=1, sticky="w", pady=2)
+                    keys_cell(column, keys).grid(row=r, column=0, sticky="w", padx=(0, size), pady=3)
+                    tk.Label(column, text=action, bg=bg, fg=DIM, font=body
+                             ).grid(row=r, column=1, sticky="w", pady=3)
                     r += 1
         win.update_idletasks()
         w, h = win.winfo_reqwidth(), win.winfo_reqheight()
@@ -968,23 +968,21 @@ class Wall:
             self.hide_topbar()
 
     def show_topbar(self):
-        u = max(13, self.H // 84)                        # 17 px on a 1440p screen
-        bg, fg, hot = "#101214", "#E6E6E6", "#2A3038"
+        m = metrics_for(self.root)
+        f = m.f
         bar = tk.Toplevel(self.root)
         bar.withdraw()
         bar.overrideredirect(True)
-        bar.configure(bg=bg)
-        tk.Label(bar, text="Tessera Wall", bg=bg, fg="#9AA4AF", font=("Segoe UI", -u, "bold")
-                 ).pack(side="left", padx=(u, u))
+        bar.configure(bg=BG)
+        tk.Frame(bar, bg="#232830", height=1).pack(side="bottom", fill="x")    # a hairline under the bar
+        row = tk.Frame(bar, bg=BG, padx=f(8), pady=f(4))
+        row.pack(fill="x")
+        tk.Label(row, text="Tessera Wall", bg=BG, fg=DIM, font=m.strong).pack(side="left", padx=(f(8), f(12)))
         rects = {}
 
-        def button(key, text, command, side="left", colour=fg, hover=hot):
-            b = tk.Button(bar, text=text, command=command, font=("Segoe UI", -u), relief="flat", bd=0, bg=bg,
-                          fg=colour, activebackground=hover, activeforeground="white", cursor="hand2",
-                          takefocus=0, padx=u, pady=u // 2)
-            b.bind("<Enter>", lambda e: b.config(bg=hover))
-            b.bind("<Leave>", lambda e: b.config(bg=bg))
-            b.pack(side=side)
+        def button(key, text, command, side="left", danger=False):
+            b = Button(row, text, command, m, kind="subtle", danger=danger, takefocus=0)
+            b.pack(side=side, padx=(0, f(2)) if side == "left" else (f(2), 0))
             rects[key] = b
 
         button("add", "Add videos…", lambda: self.add_from_dialog(folder=False))
@@ -995,7 +993,7 @@ class Wall:
         button("controls", "Controls", lambda: (self.hide_topbar(), self.toggle_help()))
         button("save", "Save wall\u2026", lambda: (self.hide_topbar(), self.save_wall_as()))
         button("settings", "Settings", lambda: (self.hide_topbar(), self.toggle_settings()))
-        button("close", "Close  ✕", self.quit, side="right", hover="#C42B1C")
+        button("close", "Close  ✕", self.quit, side="right", danger=True)
         bar.update_idletasks()
         bar.geometry(f"{self.W}x{bar.winfo_reqheight()}+{self.root.winfo_rootx()}+{self.root.winfo_rooty()}")
         bar.attributes("-alpha", 0.0)
@@ -1036,7 +1034,7 @@ class Wall:
         """Top bar: open videos from a YouTube search, like a channel link (sources.py)."""
         self.dialog_open = True
         try:
-            words = simpledialog.askstring("Search YouTube", "Search YouTube for:", parent=self.topbar)
+            words = ask_text(self.topbar, "Search YouTube", "Search for:", "Search", topmost=True)
         finally:
             self.dialog_open = False
         if words and words.strip():
@@ -1046,24 +1044,24 @@ class Wall:
 
     def recent_menu(self, anchor: tk.Widget):
         """Top bar: the recent and pinned channels, playlists and searches; picking one adds videos from
-        it, like pasting its link. Pins are set in the start window."""
-        u = max(13, self.H // 84)
-        menu = tk.Menu(anchor, tearoff=0, bg="#1B1F24", fg="#E6E6E6", activebackground="#2A3038",
-                       activeforeground="white", bd=0, font=("Segoe UI", -u))
+        it, like pasting its link. Pins are set in the start window. A themed list (ui.popup_list) below
+        the button; the bar stays while it is open."""
         items = sources.recent(self.config_path, limit=12)
-        for d in items:
-            menu.add_command(label=("★  " if d.get("pinned") else "      ")
-                             + sources.menu_name(d["source"], d.get("title")),
-                             command=lambda s=d["source"]: (log.info("recent picked: %s", s), self.incoming.put(s)))
-        log.info("recent menu: %d item(s) at %d,%d", len(items), anchor.winfo_rootx(),
-                 anchor.winfo_rooty() + anchor.winfo_height())
-        self.dialog_open = True                          # keeps the bar alive while the menu is open
-        try:
-            menu.tk_popup(anchor.winfo_rootx(), anchor.winfo_rooty() + anchor.winfo_height())
-        finally:
-            menu.grab_release()
+        x, y = anchor.winfo_rootx(), anchor.winfo_rooty() + anchor.winfo_height() + 4
+        log.info("recent menu: %d item(s) at %d,%d", len(items), x, y)
+        star = "\u2605"
+
+        def pick(s):
+            log.info("recent picked: %s", s)
+            self.incoming.put(s)
+
+        def closed():
             self.dialog_open = False
-        self.hide_topbar()
+            self.hide_topbar()
+        self.dialog_open = True                          # keeps the bar alive while the list is open
+        popup_list(self.topbar, x, y, [(sources.menu_name(d["source"], d.get("title")),
+                                        star if d.get("pinned") else "", lambda s=d["source"]: pick(s))
+                                       for d in items], metrics_for(self.root), on_close=closed)
 
     # ---- files that would not play --------------------------------------------
     def open_failed(self, path: str):
@@ -1736,7 +1734,7 @@ class Wall:
             return
         self.dialog_open = True
         try:
-            name = simpledialog.askstring("Save wall", "Name for this wall:", parent=self.root)
+            name = ask_text(self.root, "Save wall", "Name for this wall:", "Save", topmost=True)
         finally:
             self.dialog_open = False
             self.root.focus_set()

@@ -131,7 +131,7 @@ def main():
         print(f"{k:26} {v}")
     assert "callback error" not in first_log
     assert r["bad_reported"] and r["wall_still_running"] and r["tiles_left"] == 3
-    assert r["bar_shown"] and r["buttons"] == ["add", "close", "controls", "folder", "save", "settings"]
+    assert r["bar_shown"] and r["buttons"] == ["add", "close", "controls", "folder", "save", "search", "settings"]
     assert r["controls_opens_list"] and r["list_closed"]
     assert r["bar_shown_again"] and r["bar_hides_when_leaving"]
     assert r["bar_shown_third"] and r["close_exit"] == 0 and r["quit_before_timeout"]
