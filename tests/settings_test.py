@@ -106,7 +106,8 @@ def main():
                        creationflags=subprocess.CREATE_NO_WINDOW, timeout=30)
 
         sx, sy, swid, shei = w["DIM_UNFOCUSED"]             # click a third of the way along 0..60: 20
-        pad = (sh // 90) // 2                               # the slider's inner margin (u // 2 in the app)
+        unit = int(re.findall(r"settings text unit (\d+)", log_text())[-1])
+        pad = unit // 2                                     # the slider's inner margin (u // 2 in the app)
         click_at(sx + pad + round((swid - 2 * pad) / 3), sy + shei // 2)
         time.sleep(1.0)
         r["dims_after_slider"] = dims()

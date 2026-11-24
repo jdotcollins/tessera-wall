@@ -276,6 +276,15 @@ def rounded(cv, x0, y0, x1, y1, r, fill: str, bg: str, stroke: str | None = None
 BG, CARD, EDGE, WELL, CTL = "#101214", "#1A1E23", "#232830", "#121519", "#2C323A"
 FG, DIM, FAINT, ACCENT, ACCENT_HOT, HOT = "#E6E6E6", "#A3ACB6", "#5A626B", "#6CB6FF", "#8FC8FF", "#262C33"
 ON_ACCENT, DANGER, THUMB = "#0B0D0F", "#C42B1C", "#3A4048"
+TRACK = "#6B747E"            # a slider's unfilled track: 3.5:1 on CARD (WCAG 1.4.11 asks 3:1 for controls)
+
+
+def focus_ring(cv, x0, y0, x1, y1, r, fill, behind):
+    """Fluent's focus visual on a drawn control: a 2 px light outer line and a 1 px dark inner line, so one
+    of them stands out on any fill (the light one alone is only 1.7:1 on the accent blue). Draw it in
+    place of the control's own background shape; draw the control's content on top."""
+    rounded(cv, x0, y0, x1, y1, r, fill, behind, FG, 2)
+    rounded(cv, x0 + 2, y0 + 2, x1 - 2, y1 - 2, max(1, r - 2), fill, FG, BG, 1)
 
 
 class Metrics:
@@ -307,8 +316,31 @@ def icon_font(widget, size: int):
     return None
 
 
+def text_unit(widget) -> int:
+    """The body text size in pixels: Fluent's 14 px, times the display scale Windows uses for the monitor
+    (Settings > Display > Scale) and the "Text size" setting (Accessibility). The app is DPI aware, so tk
+    works in real pixels and this is where Windows' scaling comes in."""
+    dpi = 96
+    try:
+        widget.update_idletasks()
+        hwnd = wintypes.HWND(user32.GetAncestor(widget.winfo_id(), GA_ROOT))
+        dpi = user32.GetDpiForWindow(hwnd) or 96
+    except Exception:
+        pass
+    scale = 100
+    try:
+        import winreg
+        with winreg.OpenKey(winreg.HKEY_CURRENT_USER, r"SOFTWARE\Microsoft\Accessibility") as key:
+            scale = int(winreg.QueryValueEx(key, "TextScaleFactor")[0])
+    except (OSError, ValueError):
+        pass
+    if os.environ.get("TESSERAWALL_TEST_SCALE"):     # tests: as if Windows scaled by this many percent
+        dpi = 96 * int(os.environ["TESSERAWALL_TEST_SCALE"]) // 100
+    return max(10, round(14 * dpi / 96 * min(225, max(100, scale)) / 100))
+
+
 def metrics_for(widget) -> Metrics:
-    return Metrics(max(12, widget.winfo_screenheight() // 90))
+    return Metrics(text_unit(widget))
 
 
 class Button(tk.Canvas):
@@ -372,16 +404,21 @@ class Button(tk.Canvas):
         focused = self.focus_get() is self
         if self.kind == "accent":
             fill = (ACCENT_HOT if hot else ACCENT) if self.enabled else CTL
-            rounded(self, 0, 0, w, h, r, fill, self.behind, FG if focused else None, 1 if focused else 0)
             colour = ON_ACCENT if self.enabled else FAINT
         elif self.kind == "standard":
-            rounded(self, 0, 0, w, h, r, HOT if hot else CARD, self.behind, FG if focused else CTL, 1)
+            fill = HOT if hot else CARD
             colour = FG if self.enabled else FAINT
         else:
-            if hot or focused:
-                rounded(self, 0, 0, w, h, r, (DANGER if self.danger else HOT) if hot else self.behind, self.behind,
-                        FG if focused else None, 1 if focused else 0)
+            fill = (DANGER if self.danger else HOT) if hot else self.behind
             colour = ("white" if hot and self.danger else (self.fg or FG)) if self.enabled else FAINT
+        if focused:
+            focus_ring(self, 0, 0, w, h, r, fill, self.behind)
+        elif self.kind == "accent":
+            rounded(self, 0, 0, w, h, r, fill, self.behind)
+        elif self.kind == "standard":
+            rounded(self, 0, 0, w, h, r, fill, self.behind, CTL, 1)
+        elif hot:
+            rounded(self, 0, 0, w, h, r, fill, self.behind)
         self.create_text(w / 2, h / 2, text=self.text, font=self.font, fill=colour)
 
 
@@ -690,6 +727,7 @@ def settings_window(parent, config_path: str, apply, on_close, topmost: bool = F
     """
     m = metrics_for(parent)
     u, f = m.u, m.f
+    log.info("settings text unit %d", u)               # tests work out the sliders' margins from it
     bg, card, edge, well, ctl = BG, CARD, EDGE, WELL, CTL
     fg, dim, faint, accent, accent_hot, hot = FG, DIM, FAINT, ACCENT, ACCENT_HOT, HOT
     body, caption, strong, title_font = m.body, m.caption, m.strong, m.title
@@ -752,6 +790,11 @@ def settings_window(parent, config_path: str, apply, on_close, topmost: bool = F
     if os.environ.get("TESSERAWALL_TEST_SCREEN_H"):      # tests: behave as if the screen were this tall
         mh = min(mh, int(os.environ["TESSERAWALL_TEST_SCREEN_H"]))
     log.info("settings screen area %d,%d %dx%d", mx, my, mw, mh)
+    # Two columns are about 95 text units wide (1330 px at 100 %). Where that would not fit (a 1080p
+    # laptop at 150 % scale is 1280 px wide in those units), use one column; it scrolls if need be.
+    one_column = 95 * u > mw * 0.96
+    if one_column:
+        log.info("settings in one column")
     middle = tk.Frame(win, bg=bg)
     middle.pack(fill="both")
     view = tk.Canvas(middle, bg=bg, highlightthickness=0, width=1, height=1)
@@ -860,19 +903,25 @@ def settings_window(parent, config_path: str, apply, on_close, topmost: bool = F
         value_w = measure("1000 ms") + f(8)
         # The canvas is the track only, with a margin of u // 2 at each end (tests click at known fractions).
         sw_, sh_, pad = control_w - value_w, control_h, u // 2
-        cv = tk.Canvas(parent_, width=sw_, height=sh_, bg=card, highlightthickness=0, cursor="hand2")
+        cv = tk.Canvas(parent_, width=sw_, height=sh_, bg=card, highlightthickness=0, cursor="hand2",
+                       takefocus=1)
         cv.pack(side="left")
+        now = [low]
         box = tk.Frame(parent_, bg=card, width=value_w, height=sh_)
         box.pack(side="left")
         box.pack_propagate(False)
         shown = tk.Label(box, bg=card, fg=dim, font=body, anchor="e")
         shown.pack(fill="both", expand=True)
 
-        def draw(value):
+        def draw(value=None):
+            value = now[0] if value is None else value
+            now[0] = value
             x = pad + (sw_ - 2 * pad) * (value - low) / (high - low)
             mid, t = sh_ // 2, max(2, f(4) // 2)
             cv.delete("all")
-            cv.create_rectangle(pad, mid - t, sw_ - pad, mid + t, fill=ctl, width=0)
+            if cv.focus_get() is cv:
+                focus_ring(cv, 0, 0, sw_, sh_, f(4), card, card)
+            cv.create_rectangle(pad, mid - t, sw_ - pad, mid + t, fill=TRACK, width=0)
             cv.create_rectangle(pad, mid - t, x, mid + t, fill=accent, width=0)
             r_ = pad                                       # Fluent's thumb: a dark disc with an accent dot
             rounded(cv, x - r_, mid - r_, x + r_, mid + r_, r_, THUMB, card)
@@ -887,8 +936,24 @@ def settings_window(parent, config_path: str, apply, on_close, topmost: bool = F
             draw(value)
             change(name, value, 150)
 
-        cv.bind("<Button-1>", pick)
+        def nudge(steps=None, to=None):        # keys: a step, ten steps, or an end
+            value = to if to is not None else now[0] + steps * step
+            value = min(high, max(low, value))
+            value = int(round(value)) if whole else round(value, 2)
+            if value != now[0]:
+                draw(value)
+                change(name, value, 300)
+            return "break"
+
+        cv.bind("<Button-1>", lambda e: (cv.focus_set(), pick(e)))
         cv.bind("<B1-Motion>", pick)
+        for key, steps in (("<Left>", -1), ("<Down>", -1), ("<Right>", 1), ("<Up>", 1),
+                           ("<Prior>", 10), ("<Next>", -10)):
+            cv.bind(key, lambda e, n=steps: nudge(n))
+        cv.bind("<Home>", lambda e: nudge(to=low))
+        cv.bind("<End>", lambda e: nudge(to=high))
+        cv.bind("<FocusIn>", lambda e: draw())
+        cv.bind("<FocusOut>", lambda e: draw())
         refreshers.append(lambda: draw(getattr(C, name)))
         located[name] = cv
 
@@ -905,8 +970,10 @@ def settings_window(parent, config_path: str, apply, on_close, topmost: bool = F
 
         def draw(*a):
             cv.delete("all")
-            focused = cv.focus_get() is cv
-            rounded(cv, 0, 0, control_w, control_h, f(4), well, card, fg if focused else ctl, 1)
+            if cv.focus_get() is cv:
+                focus_ring(cv, 0, 0, control_w, control_h, f(4), well, card)
+            else:
+                rounded(cv, 0, 0, control_w, control_h, f(4), well, card, ctl, 1)
             for i, (value, text) in enumerate(options):
                 x0, x1 = round(i * seg_w), round((i + 1) * seg_w)
                 chosen = str(value) == var.get()
@@ -952,11 +1019,14 @@ def settings_window(parent, config_path: str, apply, on_close, topmost: bool = F
             focused = cv.focus_get() is cv
             r_ = h_ // 2
             if var.get():
-                rounded(cv, 0, 0, w_, h_, r_, accent, card)
-                k = f(7)
+                if focused:
+                    focus_ring(cv, 0, 0, w_, h_, r_, accent, card)
+                else:
+                    rounded(cv, 0, 0, w_, h_, r_, accent, card)
+                k = f(6) if focused else f(7)
                 rounded(cv, w_ - r_ - k, r_ - k, w_ - r_ + k, r_ + k, k, "#0B0D0F", accent)
             else:
-                rounded(cv, 0, 0, w_, h_, r_, card, card, fg if focused else "#8A939D", 1)
+                rounded(cv, 0, 0, w_, h_, r_, card, card, fg if focused else "#8A939D", 2 if focused else 1)
                 k = f(6)
                 rounded(cv, r_ - k, r_ - k, r_ + k, r_ + k, k, "#B5BDC6", card)
             word.config(text="On" if var.get() else "Off")
@@ -979,6 +1049,8 @@ def settings_window(parent, config_path: str, apply, on_close, topmost: bool = F
 
     for item, opts in items:
         kind = item[0]
+        if kind == "column" and one_column:
+            continue
         if kind == "column":
             columns.append(tk.Frame(body_frame, bg=bg))
             columns[-1].grid(row=0, column=len(columns) - 1, sticky="nsew", padx=(f(24), 0))
@@ -1087,7 +1159,7 @@ def start_window(last_session: list, incoming: queue.Queue, checker: "updates.Ch
     root.title("Tessera Wall")
     chosen: list = []
     chosen_plan: list = []                                # a templates.Plan, when a template was chosen
-    u = max(12, root.winfo_screenheight() // 90)          # layout unit in pixels; 16 on a 1440p screen
+    u = text_unit(root)                                   # layout unit in pixels: 14 at 100 % scaling
     bg, panel, fg, dim, accent = "#101214", "#1B1F24", "#E6E6E6", "#9AA4AF", "#6CB6FF"
     w, h = u * 42, u * 31
     mx, my, mw, mh = monitor_under_cursor()
@@ -1472,7 +1544,7 @@ def template_window(folders: list, config_path: str | None, parent=None) -> "tem
         # so a modal window opened that way never appeared and its grab froze the start window.
         win.transient(parent)
     win.title("Tessera Wall – templates")
-    u = max(12, win.winfo_screenheight() // 90)
+    u = text_unit(win)
     bg, panel, fg, dim, accent = "#101214", "#1B1F24", "#E6E6E6", "#9AA4AF", "#6CB6FF"
     win.configure(bg=bg, padx=u * 2, pady=u * 2)
     win.resizable(False, False)

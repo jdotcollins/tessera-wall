@@ -159,7 +159,8 @@ Settings, under *On screen*, where *Clean mode* makes every wall open that way.
 
 Press **H** in the wall for the list of controls, or rest the pointer on the top edge of the screen
 for a small menu bar with *Add videos*, *Add a folder*, *Search YouTube…*, *Recent*, *Controls*, *Save wall…*,
-*Settings* and *Close*.
+*Settings* and *Close*. From the keyboard, **F10** opens the menu bar (arrows move, Enter picks, Esc closes);
+**Ctrl+O** adds videos, **Ctrl+Shift+O** a folder, and **Ctrl+F** searches YouTube.
 
 A wall holds up to 24 videos. Before opening each one, Tessera Wall estimates whether your graphics card
 and free memory have room for it; videos that would not fit are left out and the wall says so, instead
@@ -193,13 +194,16 @@ of the whole PC slowing to a crawl.
 | `T` / `A` | Next subtitle track / next audio track |
 | `P` | Save a snapshot of the focused video (in Pictures\Tessera Wall; `snapshot_dir` in the settings file) |
 | `X` `Delete` middle-click | Close the focused video |
-| `L` | Layout: grow, flat, grid |
-| `C` | Crop: limited, fill, fit |
+| `L` | Arrangement: grow on hover, best fit, even grid |
+| `C` | Black bars: crop a little, crop to fill, never crop |
 | `S` | Settings |
 | `Ctrl+S` | Save this wall under a name, to open it again from the start window |
 | `Ctrl+V` | Open the links (YouTube, Twitch, stream addresses) on the clipboard, or files and folders copied in Explorer |
 | `Ctrl+B` | Black out: hide, pause and mute everything; `Ctrl+B` or `Esc` brings it all back |
 | `F5` | Reload the settings file |
+| `F10` | Open the menu bar from the keyboard (arrows move, Enter picks, Esc closes) |
+| `Ctrl+O` / `Ctrl+Shift+O` | Add videos / add a folder |
+| `Ctrl+F` | Search YouTube |
 | `U` | Open the download page, when a newer version is available |
 | `Z` | The focused video back to normal size after magnifying |
 | `I` | Clean mode: hide the outline, progress line, menu bar, messages and pointer (again to bring them back) |

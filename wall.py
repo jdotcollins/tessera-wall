@@ -97,10 +97,18 @@ HELP_SECTIONS = [
         (["Q"], "Quit and remember this session"),
     ]),
 ]
-HELP_COLUMNS = (("Mouse", "Layout"), ("Playback", "App"))
+HELP_SECTIONS.append(("Menu bar", [
+    (["F10"], "Open the menu bar from the keyboard (arrows move, Esc closes)"),
+    (["Ctrl+O"], "Add videos"),
+    (["Ctrl+Shift+O"], "Add a folder"),
+    (["Ctrl+F"], "Search YouTube"),
+]))
+HELP_COLUMNS = (("Mouse", "Layout", "Menu bar"), ("Playback", "App"))
 
 LAYOUT_MODES = ("grow", "flat", "grid")
 CROP_MODES = ("limited", "fill", "fit")
+MODE_WORDS = {"Arrangement": {"grow": "grow on hover", "flat": "best fit", "grid": "even grid"},   # as in Settings
+              "Black bars": {"limited": "crop a little", "fill": "crop to fill", "fit": "never crop"}}
 END_MODES = ("loop", "next", "random")
 END_LABELS = {"loop": "play it again", "next": "next file in its folder", "random": "random file from its folder"}
 CONNECT_TIMEOUT = 15.0   # seconds for mpv to create its IPC pipe
@@ -205,6 +213,8 @@ class Wall:
         self.top_since: float | None = None   # when the pointer reached the top edge
         self.dialog_open = False
         self.failed: list[str] = []           # files mpv could not open, not yet reported
+        self.bar_keys = False             # the menu bar was opened with F10: it has the keys until Esc or a pick
+        self.bar_building = False
         self.failed_why: dict[str, str] = {}  # sources (in failed) that could not be listed: why
         # Links that fail to open are retried (see open_failed): which yt-dlp each was tried with, the one
         # to use next, links that already had their update check, and retries still being prepared.
@@ -247,12 +257,32 @@ class Wall:
     def cycle_mode(self, attr: str, modes: tuple, label: str):
         new = modes[(modes.index(getattr(self, attr)) + 1) % len(modes)]
         setattr(self, attr, new)
-        log.info("%s mode -> %s", label.lower(), new)
-        for t in self.tiles:
-            if t.ipc:
-                t.ipc.post("show-text", f"{label}: {new}", 1500)
+        log.info("%s mode -> %s", {"Arrangement": "layout", "Black bars": "crop"}.get(label, label.lower()), new)
+        self.announce(f"{label}: {MODE_WORDS.get(label, {}).get(new, new)}", 1500)
         self.pos_at_focus_change = self.cursor()   # the grid may move under a still pointer
         self.relayout(rearrange=True)
+
+    def message_tile(self, avoid: str | None = None):
+        """Where a wall-wide message goes: the focused video, else the one at the middle of the screen
+        (not the top-left one, which the menu bar covers), else any that is playing."""
+        if self.focus and self.focus.ipc and self.focus.path != avoid:
+            return self.focus
+        live = [t for t in self.tiles if t.ipc and t.rect and t.path != avoid]
+        if not live:
+            return None
+        cx, cy = self.W / 2, self.H / 2
+        return min(live, key=lambda t: (t.rect.x + t.rect.w / 2 - cx) ** 2 + (t.rect.y + t.rect.h / 2 - cy) ** 2)
+
+    def announce(self, text: str, ms: int = 2000, problem: bool = False):
+        """One message for the whole wall, on message_tile(). A problem is shown at OSD level 0, so it
+        appears even with Messages off or in clean mode: it is not decoration."""
+        t = self.message_tile()
+        if t:
+            if problem:
+                t.ipc.post("show-text", text, ms, 0)
+            else:
+                t.ipc.post("show-text", text, ms)
+        return t
 
     # ---- tiles -------------------------------------------------------------
     def add(self, item):
@@ -824,8 +854,8 @@ class Wall:
         for t in self.tiles:
             if t.ipc and not t.pool:
                 t.ipc.set_async("loop-file", self.loop_file())
-                if to is None:
-                    t.ipc.post("show-text", f"When a video ends: {END_LABELS[self.end_mode]}", 2000)
+        if to is None:
+            self.announce(f"When a video ends: {END_LABELS[self.end_mode]}")
 
     def set_source_end(self, mode: str, announce: bool = False):
         self.source_end = mode
@@ -834,8 +864,8 @@ class Wall:
         for t in self.tiles:
             if t.ipc and t.pool:
                 t.ipc.set_async("loop-file", self.loop_file(t.pool))
-                if announce:
-                    t.ipc.post("show-text", f"When a channel video ends: {label}", 2000)
+        if announce:
+            self.announce(f"When a channel video ends: {label}")
 
     def load_into(self, t: Tile, new: str, announce: bool = True, ready: dict | None = None):
         log.info("file swapped: %s -> %s%s", t.path, new, " (prepared)" if ready and ready.get("r") else "")
@@ -968,7 +998,26 @@ class Wall:
         elif not self.dialog_open and not (over_wall and -8 <= y <= self.topbar.winfo_height() + 24):
             self.hide_topbar()
 
-    def show_topbar(self):
+    def show_topbar(self, keyboard: bool = False):
+        """keyboard (F10): the bar takes the focus on its first button; arrows or Tab move, Space or Enter
+        pick, Esc closes. It stays until then, wherever the pointer is."""
+        if self.bar_building:                            # bar.update() below runs pending events: a second
+            return                                       # F10 (or the edge) must not build a second bar
+        if self.topbar is not None:
+            if keyboard and not self.bar_keys:
+                self.hide_topbar()                       # shown by the pointer: show it again, focusable
+            else:
+                return
+        self.bar_building = True
+        try:
+            self._build_topbar(keyboard)
+        finally:
+            self.bar_building = False
+
+    def _build_topbar(self, keyboard: bool):
+        if keyboard:                 # before anything else: building runs the wall's tick, which would
+            self.bar_keys = self.dialog_open = True        # otherwise hide a bar the pointer is not near
+            log.info("top bar opened from the keyboard")
         m = metrics_for(self.root)
         f = m.f
         bar = tk.Toplevel(self.root)
@@ -982,7 +1031,7 @@ class Wall:
         rects = {}
 
         def button(key, text, command, side="left", danger=False):
-            b = Button(row, text, command, m, kind="subtle", danger=danger, takefocus=0)
+            b = Button(row, text, command, m, kind="subtle", danger=danger, takefocus=1 if keyboard else 0)
             b.pack(side=side, padx=(0, f(2)) if side == "left" else (f(2), 0))
             rects[key] = b
 
@@ -1004,6 +1053,19 @@ class Wall:
         self.topbar = bar
         bar.update()                                     # lay the buttons out now: their positions are logged
         fade(bar, 1.0, 120)
+        if keyboard:                                     # the wall leaves the keys to the bar meanwhile
+            order = list(rects.values())
+
+            def step(e, by):
+                i = order.index(e.widget) if e.widget in order else 0
+                order[(i + by) % len(order)].focus_set()
+                return "break"
+            for b in order:
+                b.bind("<Right>", lambda e: step(e, 1))
+                b.bind("<Left>", lambda e: step(e, -1))
+            bar.bind("<Escape>", lambda e: (self.hide_topbar(), "break")[1])
+            bar.focus_force()
+            order[0].focus_set()
         log.info("top bar shown: %s", " ".join(
             f"{k}={b.winfo_rootx()},{b.winfo_rooty()},{b.winfo_width()},{b.winfo_height()}" for k, b in rects.items()))
 
@@ -1012,7 +1074,11 @@ class Wall:
             bar = self.topbar
             self.topbar, self.top_since = None, None      # gone as far as the wall is concerned
             fade(bar, 0.0, 80, bar.destroy)
-            self.root.focus_set()                        # keys go back to the wall
+            if self.bar_keys:                            # opened with F10: give the keys back, and the
+                self.bar_keys = self.dialog_open = False   # window focus (the bar had it; without this Windows
+                self.root.focus_force()                  # may hand it to another app)
+            else:
+                self.root.focus_set()                    # keys go back to the wall
             log.info("top bar hidden")
 
     def add_from_dialog(self, folder: bool):
@@ -1098,9 +1164,9 @@ class Wall:
             return
         self.link_checked.add(path)
         self.retrying += 1
-        target = next((t for t in self.tiles if t.ipc and t.path != path), None)
+        target = self.message_tile(avoid=path)
         if target and check:
-            target.ipc.post("show-text", "A link didn't open. Trying again…", 4000)
+            target.ipc.post("show-text", "A link didn't open. Trying again…", 4000, 0)
 
         def work():
             exe = None
@@ -1315,10 +1381,9 @@ class Wall:
                 messagebox.showerror("Tessera Wall", msg)
             self.root.destroy()
             return
-        target = next((t for t in self.tiles if t.ipc), None)
-        if target:                                       # otherwise wait until a player can show it
+        if self.message_tile():                          # otherwise wait until a player can show it
             log.info("could not play: %s", "; ".join(self.failed))
-            target.ipc.post("show-text", msg, 7000)
+            self.announce(msg, 7000, problem=True)
             self.failed.clear()
 
     def toggle_settings(self):
@@ -1727,10 +1792,10 @@ class Wall:
     def report_refused(self):
         if not self.refused:
             return
-        target = next((t for t in self.tiles if t.ipc), None)
+        target = self.message_tile()
         if target:
             n = len(self.refused)
-            target.ipc.post("show-text", f"{n} video{'s' if n != 1 else ''} not opened: {self.refused[0]}", 7000)
+            target.ipc.post("show-text", f"{n} video{'s' if n != 1 else ''} not opened: {self.refused[0]}", 7000, 0)
             log.info("refused reported: %d (%s)", n, self.refused[0])
             self.refused = []
 
@@ -1920,13 +1985,30 @@ class Wall:
         self.root.bind("<Shift-Tab>", lambda e: self.move_focus(-1))
         for seq in ("<Control-s>", "<Control-S>"):
             bind_all(seq, lambda e: None if self.dialog_open else self.save_wall_as())
+        # The menu bar from the keyboard. Its dialogs need the bar as their parent (it is above the wall).
+        bind_all("<F10>", lambda e: None if self.dialog_open else (self.show_topbar(keyboard=True), "break")[1])
+
+        def from_bar(action):
+            if self.dialog_open:
+                return None
+            # Opened as F10 does: that holds the bar while it is built (the wall's tick would otherwise
+            # hide a bar the pointer is not near, leaving the dialog without a parent).
+            self.show_topbar(keyboard=True)
+            if self.topbar is None:
+                return "break"
+            action()
+            return "break"
+        for seq in ("<Control-o>", "<Control-O>"):          # with Shift: a folder
+            bind_all(seq, lambda e: from_bar(lambda: self.add_from_dialog(folder=bool(e.state & 0x1))))
+        for seq in ("<Control-f>", "<Control-F>"):
+            bind_all(seq, lambda e: from_bar(self.search_from_dialog))
         b("<F5>", lambda e: self.reload_config())
         b("<s>", lambda e: self.toggle_settings())
         b("<u>", lambda e: self.open_update())
         for seq in ("<h>", "<question>", "<F1>"):
             b(seq, lambda e: self.toggle_help())
-        b("<l>", lambda e: self.cycle_mode("layout_mode", LAYOUT_MODES, "Layout"))
-        b("<c>", lambda e: self.cycle_mode("crop_mode", CROP_MODES, "Crop"))
+        b("<l>", lambda e: self.cycle_mode("layout_mode", LAYOUT_MODES, "Arrangement"))
+        b("<c>", lambda e: self.cycle_mode("crop_mode", CROP_MODES, "Black bars"))
         b("<Next>", lambda e: self.step_file(1))     # Page Down
         b("<Prior>", lambda e: self.step_file(-1))   # Page Up
         b("<ButtonRelease-1>", self.on_release)

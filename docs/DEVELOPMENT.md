@@ -217,7 +217,7 @@ folder on the development PC still has the old name; nothing depends on it.
   it (it raises the wall over the list; use `focus_set`).
 - Design language: every window is built from the shared pieces at the top of `ui.py`, after Windows 11
   (Fluent 2): the colour tokens (`BG`, `CARD`, `ACCENT`...), `Metrics` (14 px text, 12 px captions, 32 px
-  controls, the 4 px grid, scaled to the screen by `f()`), `rounded()` for smooth corners, `Button`
+  controls, the 4 px grid, scaled by `f()`), `rounded()` for smooth corners, `Button`
   (accent, standard or subtle; acts on release, Space/Enter when focused), `card_frame()` (a rounded
   card, optionally clickable with a hover shade and a chevron), `ask_text()` (the themed text dialog
   that replaced tkinter's `simpledialog` for Search YouTube and Save wall), `popup_list()` (the Recent
@@ -554,6 +554,7 @@ python tests/settings_test.py   # settings window: slider, choice, checkbox, res
 python tests/settings_scroll_test.py  # settings from the start window on a short screen: scroll, wheel
 python tests/recent_test.py     # menu bar's Recent list: pin with the star, pick by click and by Enter, Esc
 python tests/kill_test.py       # a killed wall takes its mpv players with it
+python tests/keys_test.py       # menu bar from the keyboard: F10, arrows, Enter, Esc, Ctrl+F
 python tests/label_test.py      # visual: saves screenshots, asserts only that nothing crashed
 python tests/stress_test.py     # GPU driver-timeout check
 ```
@@ -581,7 +582,24 @@ Notes for anyone running or writing them:
   settings: a dimming of 0 made `features_test.py` fail for no fault in the app.
 - Environment overrides exist for tests only: `TESSERAWALL_UNFOCUSED_SKIP`, `TESSERAWALL_HELP_OPACITY`,
   `TESSERAWALL_UNSAFE_RENDERING`, `TESSERAWALL_MPV_LOG_DIR`, `TESSERAWALL_TEST_SCREEN_H` (Settings sizes
-  itself as if the screen were this tall).
+  itself as if the screen were this tall), `TESSERAWALL_TEST_SCALE` (the windows size themselves as if
+  Windows scaled the display by this many percent).
+- Sizing and accessibility (from the UX research, 2026-11-24): the windows' text unit is `text_unit()`:
+  14 px times the monitor's scale (`GetDpiForWindow`/96; the app is per-monitor DPI aware) times
+  Windows' "Text size" (`HKCU\SOFTWARE\Microsoft\Accessibility\TextScaleFactor`). It used to be screen
+  height / 90, which ignored both. Settings drops to one column when two would be wider than the
+  screen (about 95 units). The wall's own overlays (controls list, on-screen text) still scale with the
+  screen height, since the wall is read from a distance. Every drawn control is reachable by Tab and
+  draws `focus_ring()` (2 px light outside, 1 px dark inside, visible on the accent blue too); sliders
+  take arrows, Page Up/Down, Home/End. A slider's unfilled track is `TRACK` (3.5:1 on a card). The menu
+  bar opens from the keyboard with F10 (`show_topbar(keyboard=True)`: it holds `dialog_open` until Esc
+  or a pick, set before the bar is built, because building runs the wall's tick, which hides a bar the
+  pointer is not near), Ctrl+O / Ctrl+Shift+O / Ctrl+F reach its actions directly. Wall-wide messages go through
+  `Wall.announce` to one tile (`message_tile`: the focused one, else the one at the screen's middle, not
+  the top-left one under the menu bar); problems (a video that could not play, a link being retried,
+  videos refused) are posted at OSD level 0, so they show with Messages off and in clean mode. L and C
+  announce once, in Settings' words. Not done: screen-reader support (tk 8.6 exposes no UI Automation
+  for canvas-drawn controls), contrast themes, reduced motion.
 - A popup that the wall does not wait for (`popup_list`) must end its keys with "break", and the wall
   must forget a press it opened one with: the wall ignores mouse events while `dialog_open`, so the
   release of that click never reaches it (`recent_test.py` caught both: a stuck press that kept the
