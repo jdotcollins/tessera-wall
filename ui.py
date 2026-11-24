@@ -547,8 +547,8 @@ def ask_text(parent, title: str, prompt: str, ok: str, initial: str = "", topmos
     Button(row, ok, lambda: done(entry.get()), m, kind="accent", width="fill").grid(row=0, column=0, sticky="ew",
                                                                                      padx=(0, m.f(4)))
     Button(row, "Cancel", done, m, width="fill").grid(row=0, column=1, sticky="ew", padx=(m.f(4), 0))
-    win.bind("<Return>", lambda e: done(entry.get()))
-    win.bind("<Escape>", lambda e: done())
+    win.bind("<Return>", lambda e: (done(entry.get()), "break")[1])    # the key stops here (see popup_list)
+    win.bind("<Escape>", lambda e: (done(), "break")[1])
     win.protocol("WM_DELETE_WINDOW", done)
     win.update_idletasks()
     w, h = win.winfo_reqwidth(), win.winfo_reqheight()
@@ -634,10 +634,12 @@ def popup_list(parent, x: int, y: int, entries: list, m: Metrics, on_close=None,
             r.state["hot"] = i == at[0]
             r.draw()
 
-    win.bind("<Escape>", lambda e: close())
-    win.bind("<Down>", lambda e: move(1))
-    win.bind("<Up>", lambda e: move(-1))
-    win.bind("<Return>", lambda e: rows[at[0]].invoke() if at[0] is not None else None)
+    # "break": the key stops here. Otherwise it would go on to the app-wide bindings once the list has
+    # closed (Esc would also quit the wall behind it, Up and Down would change its volume).
+    win.bind("<Escape>", lambda e: (close(), "break")[1])
+    win.bind("<Down>", lambda e: (move(1), "break")[1])
+    win.bind("<Up>", lambda e: (move(-1), "break")[1])
+    win.bind("<Return>", lambda e: (rows[at[0]].invoke() if at[0] is not None else None, "break")[1])
 
     def outside(e):          # with the grab on, clicks anywhere come here
         if not (0 <= e.x_root - win.winfo_rootx() < win.winfo_width()
@@ -747,6 +749,9 @@ def settings_window(parent, config_path: str, apply, on_close, topmost: bool = F
     # The cards sit in a canvas, so that on a screen too short for them they scroll (wheel, a thin bar on
     # the right, and Tab brings the focused control into view). On a tall enough screen nothing scrolls.
     mx, my, mw, mh = monitor_under_cursor()
+    if os.environ.get("TESSERAWALL_TEST_SCREEN_H"):      # tests: behave as if the screen were this tall
+        mh = min(mh, int(os.environ["TESSERAWALL_TEST_SCREEN_H"]))
+    log.info("settings screen area %d,%d %dx%d", mx, my, mw, mh)
     middle = tk.Frame(win, bg=bg)
     middle.pack(fill="both")
     view = tk.Canvas(middle, bg=bg, highlightthickness=0, width=1, height=1)
@@ -758,6 +763,8 @@ def settings_window(parent, config_path: str, apply, on_close, topmost: bool = F
 
     def draw_bar(first=None, last=None):
         if first is not None:
+            if scroll["on"] and round(float(first), 2) != round(scroll["first"], 2):
+                log.info("settings scrolled to %.2f", float(first))
             scroll["first"], scroll["last"] = float(first), float(last)
         sb.delete("all")
         h_ = sb.winfo_height()
@@ -787,6 +794,7 @@ def settings_window(parent, config_path: str, apply, on_close, topmost: bool = F
             scroll["on"] = on
             if on:
                 sb.pack(side="left", fill="y", padx=(f(10), 0))
+                log.info("settings scroll: on, view %d of %d px", room, bh)
             else:
                 sb.pack_forget()
                 view.yview_moveto(0)
@@ -1010,6 +1018,7 @@ def settings_window(parent, config_path: str, apply, on_close, topmost: bool = F
         if timer[0]:
             win.after_cancel(timer[0])
         flush()
+        log.info("settings closed")
         on_close()
         fade(win, 0.0, 80, win.destroy)
 

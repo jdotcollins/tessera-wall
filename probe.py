@@ -16,6 +16,7 @@ import tempfile
 import time
 
 import config as C
+from winapi import end_with_app
 
 log = logging.getLogger("tesserawall")
 CACHE_VERSION = 1
@@ -146,6 +147,7 @@ def probe(paths: list[str], cache_path: str, progress=None, mpv: str | None = No
             except OSError as e:
                 log.error("shape probe could not start mpv: %s", e)
                 continue
+            end_with_app(proc.pid)                # ends with the app, even if the app is killed (winapi.py)
             running.append((proc, batch, out, time.monotonic() + 10 + SECONDS_PER_FILE * len(batch)))
         done_lines = {}
         while running:

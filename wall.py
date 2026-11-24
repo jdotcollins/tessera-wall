@@ -33,7 +33,7 @@ import templates
 import ytdlp
 from ui import (ACCENT, BG, CTL, DIM, FG, Button, ask_text, fade, hover, icon_font, key_chip, metrics_for,
                 paste_async, popup_list, round_corners, settings_window)
-from winapi import GA_ROOT, pictures_folder, user32
+from winapi import GA_ROOT, end_with_app, pictures_folder, user32
 
 log = logging.getLogger("tesserawall")
 
@@ -336,6 +336,7 @@ class Wall:
         except OSError as e:
             log.error("could not start mpv for %s: %s", path, e)
             return None
+        end_with_app(proc.pid)                   # ends with the app, even if the app is killed (winapi.py)
         return proc, pipe
 
     def restart(self, t: Tile, code) -> bool:
@@ -1067,11 +1068,20 @@ class Wall:
         def closed():
             self.dialog_open = False
             self.hide_topbar()
+        # The list opens on the release of the click on Recent, and the wall ignores mouse events while it
+        # is open, so it never sees that release: clear the press now, or it would think the button is
+        # still down (no menu bar, no hover) until the next click.
+        self.pressing, self.press_tile, self.dragging = False, None, False
         self.dialog_open = True                          # keeps the bar alive while the list is open
-        popup_list(self.topbar, x, y, [(sources.menu_name(d["source"], d.get("title")),
-                                        (on, ACCENT) if d.get("pinned") else (off, DIM),
-                                        lambda s=d["source"]: pick(s), lambda d=d: pin_toggle(d))
-                                       for d in items], m, on_close=closed, mark_font=star_font)
+        pop = popup_list(self.topbar, x, y, [(sources.menu_name(d["source"], d.get("title")),
+                                              (on, ACCENT) if d.get("pinned") else (off, DIM),
+                                              lambda s=d["source"]: pick(s), lambda d=d: pin_toggle(d))
+                                             for d in items], m, on_close=closed, mark_font=star_font)
+        if pop.rows:                                     # where the rows and their stars are, for tests
+            star = m.f(12) + pop.rows[0].mark_w // 2
+            log.info("recent list rows: star=%d,0,0,0 %s", star, " ".join(
+                f"r{i}={b.winfo_rootx()},{b.winfo_rooty()},{b.winfo_width()},{b.winfo_height()}"
+                for i, b in enumerate(pop.rows)))
 
     # ---- files that would not play --------------------------------------------
     def open_failed(self, path: str):

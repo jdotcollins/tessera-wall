@@ -196,7 +196,8 @@ folder on the development PC still has the old name; nothing depends on it.
   a video. A switch's whole card is clickable and its logged rectangle is the card; a segment's logged
   rectangle is its part of the choice control. Opened
   with `S`, the menu bar, or the start window's link; `tests/settings_test.py` covers the wall route
-  with real clicks. **The start-window route and "Open the settings file" are not tested.**
+  with real clicks, `tests/settings_scroll_test.py` the start-window route on a short screen
+  (`TESSERAWALL_TEST_SCREEN_H`). **"Open the settings file" is not tested.**
 - Menu bar: `Wall.update_topbar` shows a slim always-on-top `Toplevel` when the pointer rests on the top
   3 px of the wall for 0.25 s, and hides it when the pointer leaves. Buttons: Add videos, Add a folder
   (native dialogs, **not covered by any test**), Controls, Close. `bar.update()` is called before the
@@ -517,6 +518,8 @@ python test_config.py
 python test_updates.py
 python test_templates.py
 python test_ytdlp.py
+python test_sources.py
+python test_jobs.py           # Windows: players end with a killed app
 python tests/smoke.py           # every test below takes over the screen, mouse and often keyboard
 python tests/freeze_test.py     # a suspended player must not stall the wall
 python tests/phase2_test.py     # speed, frame step, A-B loop, tracks, snapshot, crash restart
@@ -548,6 +551,9 @@ python tests/start_test.py      # the start window: resume button, drop, Esc
 python tests/update_test.py     # update notice against a local fake server
 python tests/polish_test.py     # top-edge menu bar; "couldn't play" message
 python tests/settings_test.py   # settings window: slider, choice, checkbox, reset, S / Esc
+python tests/settings_scroll_test.py  # settings from the start window on a short screen: scroll, wheel
+python tests/recent_test.py     # menu bar's Recent list: pin with the star, pick by click and by Enter, Esc
+python tests/kill_test.py       # a killed wall takes its mpv players with it
 python tests/label_test.py      # visual: saves screenshots, asserts only that nothing crashed
 python tests/stress_test.py     # GPU driver-timeout check
 ```
@@ -574,7 +580,22 @@ Notes for anyone running or writing them:
   save a session unless `--session` does. Before this, tests silently picked up the developer's own
   settings: a dimming of 0 made `features_test.py` fail for no fault in the app.
 - Environment overrides exist for tests only: `TESSERAWALL_UNFOCUSED_SKIP`, `TESSERAWALL_HELP_OPACITY`,
-  `TESSERAWALL_UNSAFE_RENDERING`, `TESSERAWALL_MPV_LOG_DIR`.
+  `TESSERAWALL_UNSAFE_RENDERING`, `TESSERAWALL_MPV_LOG_DIR`, `TESSERAWALL_TEST_SCREEN_H` (Settings sizes
+  itself as if the screen were this tall).
+- A popup that the wall does not wait for (`popup_list`) must end its keys with "break", and the wall
+  must forget a press it opened one with: the wall ignores mouse events while `dialog_open`, so the
+  release of that click never reaches it (`recent_test.py` caught both: a stuck press that kept the
+  menu bar from showing again, and an Esc that closed the list and then quit the wall).
+- `sources_test.py` needs YouTube and times two swaps (N, and a Short that ends) against 1.5 s; on
+  2026-11-24 each failed once, on different runs, with every other check passing: YouTube was slow.
+- Players end with the app: `winapi.end_with_app` puts every mpv the app starts (`Wall.spawn`'s
+  players and `probe.py`'s shape readers) in one job object with "kill on job close", whose only handle
+  the app holds, so a crash or a kill ends them too, with whatever they started (yt-dlp, Deno). Before
+  this (until 0.12.3) a killed wall left its players running, muted and windowless. The app itself is
+  not in the job, so what it opens on purpose (browser, editor, a new instance) outlives it. yt-dlp
+  runs the app starts itself (listing, updates) are not in it; they end on their own. `test_jobs.py`
+  checks the job with stand-in processes (and a control without it), `tests/kill_test.py` with a real
+  wall. `smoke.py` fails while any mpv is left over; end leftovers by PID, never by name.
 - One unexplained event: `features_test.py` once failed "r should restart every video" and passed on
   every run since. 65 looped cycles in `restart_test.py` rule out dropped commands. It now prints
   `wall_logged_restart`; False on a repeat would mean the key press never reached the wall.
