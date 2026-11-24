@@ -32,8 +32,8 @@ $MpvCommit  = 'bcde6b93cc'
 # yt-dlp, which mpv uses to play web links (YouTube, Twitch...). Public domain (Unlicense). Pinned like
 # mpv and never modified; the app keeps a separate copy updated from yt-dlp's stable channel (ytdlp.py),
 # because sites change faster than releases.
-$YtdlpVersion = '2026.10.26'
-$YtdlpSha256  = 'f5389d3698ecde4ef06f4e6b1ce0294fe9ac1396228c8990b8d3416d6d177a7d'
+$YtdlpVersion = '2026.11.23'
+$YtdlpSha256  = '622ed48023cac1daa52a3bf3a6ac38f03514de214b5f0fa069389fd0f6d17e5c'
 
 # Deno, the JavaScript runtime yt-dlp needs for YouTube (MIT). Pinned per release like mpv; yt-dlp needs
 # 2.3.0 or newer. SHA-256 of the official deno-x86_64-pc-windows-msvc.zip (GitHub's published digest).
