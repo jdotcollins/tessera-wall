@@ -388,7 +388,8 @@ class Button(tk.Canvas):
 def card_frame(parent, m: Metrics, behind=BG, click=None, min_h=None, accent_edge=False):
     """A rounded card (Fluent's SettingsCard) as a canvas holding a frame. Returns (canvas, inner frame); put
     content in the frame with bg=CARD. With `click`, the whole card is a button: it lightens under the
-    pointer and calls click() on release. The canvas sizes itself to the frame (at least min_h high).
+    pointer and calls click() on release; Tab reaches it (a white outline shows the focus) and Space or
+    Enter click it. The canvas sizes itself to the frame (at least min_h high).
     Call canvas.wire() once the content is in: it sizes the card, and makes every part of it take the
     pointer."""
     pad_x, pad_y = m.f(16), m.f(8)
@@ -398,10 +399,19 @@ def card_frame(parent, m: Metrics, behind=BG, click=None, min_h=None, accent_edg
     item = cv.create_window(pad_x, pad_y, anchor="nw", window=inner)
     look = {"fill": CARD}
 
+    def focused():
+        try:
+            return cv.focus_get() is cv
+        except (KeyError, tk.TclError):            # focus in a window tk does not know (a native dialog)
+            return False
+
     def redraw(e=None):
         w_, h_ = cv.winfo_width(), cv.winfo_height()
         cv.delete("shape")
-        rounded(cv, 0, 0, w_, h_, m.f(5), look["fill"], behind, ACCENT if accent_edge else EDGE, 1)
+        if click and focused():                    # Fluent's focus visual: a 2 px light outline
+            rounded(cv, 0, 0, w_, h_, m.f(5), look["fill"], behind, FG, 2)
+        else:
+            rounded(cv, 0, 0, w_, h_, m.f(5), look["fill"], behind, ACCENT if accent_edge else EDGE, 1)
         cv.itemconfig(item, width=w_ - 2 * pad_x)
         cv.coords(item, pad_x, (h_ - inner.winfo_reqheight()) // 2)
 
@@ -469,7 +479,13 @@ def card_frame(parent, m: Metrics, behind=BG, click=None, min_h=None, accent_edg
             for c in w.winfo_children():
                 hook(c)
         hook(cv)
+        cv.config(takefocus=1)
+        cv.bind("<FocusIn>", redraw, add="+")
+        cv.bind("<FocusOut>", redraw, add="+")
+        for key in ("<space>", "<Return>"):
+            cv.bind(key, lambda e: (click(), "break")[1])
     cv.wire = wire
+    cv.fit = fit                     # measure again, after content was added
     cv.shade = shade
     return cv, inner
 
@@ -555,15 +571,19 @@ def ask_text(parent, title: str, prompt: str, ok: str, initial: str = "", topmos
     return answer[0] if answer else None
 
 
-def popup_list(parent, x: int, y: int, entries: list, m: Metrics, on_close=None):
-    """A themed drop-down list at screen x, y (Fluent's menu flyout): entries are (text, mark, action),
-    mark a short glyph shown before the text (or ""). Picking one runs its action; a click elsewhere or Esc
-    closes it. Returns the window."""
+def popup_list(parent, x: int, y: int, entries: list, m: Metrics, on_close=None, mark_font=None):
+    """A themed drop-down list at screen x, y (Fluent's menu flyout). Entries are (text, mark, action) or
+    (text, mark, action, on_mark): mark is a short glyph shown before the text, as a string (drawn in the
+    accent colour) or (glyph, colour), or "". Picking an entry runs its action and closes the list. With
+    on_mark, the mark is a button of its own: clicking it calls on_mark(), which returns the new mark, and
+    the list stays open (the Recent list's pin star). Up/Down move, Enter picks, Esc or a click elsewhere
+    closes. Returns the window."""
     win = tk.Toplevel(parent)
     win.withdraw()
     win.overrideredirect(True)
     win.configure(bg=CARD, padx=m.f(4), pady=m.f(4))
     closed = [False]
+    mark_font = mark_font or m.body
 
     def close(then=None):
         if closed[0]:
@@ -578,14 +598,46 @@ def popup_list(parent, x: int, y: int, entries: list, m: Metrics, on_close=None)
             then()
         if on_close:
             on_close()
-    mark_w = max([m.measure(win, mk) for _, mk, _ in entries if mk] + [0])
-    for text, mark, action in entries:
-        label = (f"{mark}  " if mark else "") + text
-        b = Button(win, label, lambda a=action: close(a), m, kind="subtle", width="fill", behind=CARD, takefocus=0)
-        b.config(width=max(int(b.cget("width")), m.measure(win, text) + mark_w + 3 * m.f(12)))
-        b.draw = (lambda b=b, mark=mark, text=text: _menu_row_draw(b, mark, text, mark_w))
+
+    def glyph(mark):
+        return mark[0] if isinstance(mark, tuple) else mark
+    mark_w = max([m.measure(win, glyph(e[1]), mark_font) for e in entries if e[1]] + [0])
+    rows = []
+    for entry in entries:
+        text, mark, action = entry[:3]
+        on_mark = entry[3] if len(entry) > 3 else None
+        b = Button(win, text, lambda a=action: close(a), m, kind="subtle", width="fill", behind=CARD, takefocus=0)
+        b.config(width=max(int(b.cget("width")), m.measure(win, text) + mark_w + 4 * m.f(12)))
+        b.mark, b.mark_font, b.mark_w, b.label = mark, mark_font, mark_w, text
+        b.draw = (lambda b=b: _menu_row_draw(b))
+        if on_mark:
+            zone = m.f(12) + mark_w + m.f(5)               # the mark's own column
+
+            def release(e, b=b, on_mark=on_mark, zone=zone):
+                inside = 0 <= e.x < b.winfo_width() and 0 <= e.y < b.winfo_height()
+                b.state["down"] = False
+                if inside and e.x < zone:
+                    b.mark = on_mark()
+                    b.draw()
+                elif inside:
+                    b.invoke()
+            b.bind("<ButtonRelease-1>", release)
         b.pack(fill="x")
+        rows.append(b)
+    at = [None]
+
+    def move(step):
+        if not rows:
+            return
+        at[0] = 0 if at[0] is None else (at[0] + step) % len(rows)
+        for i, r in enumerate(rows):
+            r.state["hot"] = i == at[0]
+            r.draw()
+
     win.bind("<Escape>", lambda e: close())
+    win.bind("<Down>", lambda e: move(1))
+    win.bind("<Up>", lambda e: move(-1))
+    win.bind("<Return>", lambda e: rows[at[0]].invoke() if at[0] is not None else None)
 
     def outside(e):          # with the grab on, clicks anywhere come here
         if not (0 <= e.x_root - win.winfo_rootx() < win.winfo_width()
@@ -601,10 +653,11 @@ def popup_list(parent, x: int, y: int, entries: list, m: Metrics, on_close=None)
     win.update()
     win.grab_set()
     win.focus_force()
+    win.rows = rows
     return win
 
 
-def _menu_row_draw(b: "Button", mark: str, text: str, mark_w: int):
+def _menu_row_draw(b: "Button"):
     """A popup_list row: left-aligned, the mark (a star) in its own column."""
     w, h = b.winfo_width(), b.winfo_height()
     if w <= 1:
@@ -613,10 +666,12 @@ def _menu_row_draw(b: "Button", mark: str, text: str, mark_w: int):
     if b.state["hot"]:
         rounded(b, 0, 0, w, h, b.m.f(4), HOT, b.behind)
     x = b.m.f(12)
-    if mark_w:
-        b.create_text(x, h / 2, text=mark, font=b.m.body, fill=ACCENT, anchor="w")
-        x += mark_w + b.m.f(10)
-    b.create_text(x, h / 2, text=text, font=b.m.body, fill=FG, anchor="w")
+    if b.mark_w:
+        if b.mark:
+            glyph, colour = b.mark if isinstance(b.mark, tuple) else (b.mark, ACCENT)
+            b.create_text(x, h / 2, text=glyph, font=b.mark_font, fill=colour, anchor="w")
+        x += b.mark_w + b.m.f(10)
+    b.create_text(x, h / 2, text=b.label, font=b.m.body, fill=FG, anchor="w")
 
 
 def settings_window(parent, config_path: str, apply, on_close, topmost: bool = False) -> tk.Toplevel:
@@ -687,9 +742,76 @@ def settings_window(parent, config_path: str, apply, on_close, topmost: bool = F
                 hint.config(fg=faint if clean.get() else dim)
     clean.trace_add("write", grey_out)
 
-    tk.Label(win, text="Settings", bg=bg, fg="white", font=title_font).pack(anchor="w", pady=(0, f(16)))
-    body_frame = tk.Frame(win, bg=bg)
-    body_frame.pack(fill="both")
+    title = tk.Label(win, text="Settings", bg=bg, fg="white", font=title_font)
+    title.pack(anchor="w", pady=(0, f(16)))
+    # The cards sit in a canvas, so that on a screen too short for them they scroll (wheel, a thin bar on
+    # the right, and Tab brings the focused control into view). On a tall enough screen nothing scrolls.
+    mx, my, mw, mh = monitor_under_cursor()
+    middle = tk.Frame(win, bg=bg)
+    middle.pack(fill="both")
+    view = tk.Canvas(middle, bg=bg, highlightthickness=0, width=1, height=1)
+    view.pack(side="left", fill="both")
+    sb = tk.Canvas(middle, bg=bg, highlightthickness=0, width=f(6), height=1)
+    body_frame = tk.Frame(view, bg=bg)
+    view.create_window(0, 0, anchor="nw", window=body_frame)
+    scroll = {"on": False, "first": 0.0, "last": 1.0}
+
+    def draw_bar(first=None, last=None):
+        if first is not None:
+            scroll["first"], scroll["last"] = float(first), float(last)
+        sb.delete("all")
+        h_ = sb.winfo_height()
+        if scroll["on"] and h_ > 1:
+            y0, y1 = scroll["first"] * h_, max(scroll["first"] * h_ + f(24), scroll["last"] * h_)
+            rounded(sb, 0, y0, f(6), min(h_, y1), f(3), "#4A525C", bg)
+    view.config(yscrollcommand=draw_bar)
+    sb.bind("<Configure>", lambda e: draw_bar())
+    sb.bind("<B1-Motion>", lambda e: view.yview_moveto(max(0.0, e.y / max(1, sb.winfo_height())
+                                                           - (scroll["last"] - scroll["first"]) / 2)))
+    sb.bind("<Button-1>", lambda e: view.yview_moveto(max(0.0, e.y / max(1, sb.winfo_height())
+                                                          - (scroll["last"] - scroll["first"]) / 2)))
+
+    footer_built: list = []
+    cards: list = []
+
+    def sync(e=None):        # the view is the cards' size, or as tall as the screen allows
+        if not footer_built:
+            return
+        foot = footer_built[0]
+        bw, bh = body_frame.winfo_reqwidth(), body_frame.winfo_reqheight()
+        chrome = (title.winfo_reqheight() + f(16) + foot.winfo_reqheight() + f(24) + 2 * f(24)
+                  + f(40))                         # the title bar, roughly
+        room = int(mh * 0.94) - chrome
+        on = bh > room
+        if on != scroll["on"]:
+            scroll["on"] = on
+            if on:
+                sb.pack(side="left", fill="y", padx=(f(10), 0))
+            else:
+                sb.pack_forget()
+                view.yview_moveto(0)
+        view.config(width=bw, height=min(bh, room), scrollregion=(0, 0, bw, bh))
+        draw_bar()
+    body_frame.bind("<Configure>", sync)
+
+    def wheel(e):
+        if scroll["on"]:
+            view.yview_scroll(int(-e.delta / 120) * 3, "units")
+    view.config(yscrollincrement=f(16))
+    win.bind("<MouseWheel>", wheel)
+
+    def into_view(e):        # Tab to a control below the fold: scroll it into sight
+        if not scroll["on"] or e.widget is win:
+            return
+        try:
+            top = e.widget.winfo_rooty() - body_frame.winfo_rooty()
+        except tk.TclError:
+            return
+        bh = body_frame.winfo_height()
+        shown_top, shown_h = scroll["first"] * bh, view.winfo_height()
+        if top < shown_top or top + e.widget.winfo_height() > shown_top + shown_h:
+            view.yview_moveto(max(0.0, (top - shown_h / 3) / bh))
+    win.bind("<FocusIn>", into_view, add="+")
     columns = [tk.Frame(body_frame, bg=bg)]
     columns[0].grid(row=0, column=0, sticky="nsew")
     body_frame.grid_columnconfigure(0, weight=1, uniform="col")
@@ -702,6 +824,7 @@ def settings_window(parent, config_path: str, apply, on_close, topmost: bool = F
         """One setting: a rounded card with its title (and description) on the left; returns the frame on the
         right for the control, and the card itself."""
         cv, inner = card_frame(columns[-1], m, min_h=card_min_h)
+        cards.append(cv)
         cv.pack(fill="x", pady=(0, f(4)))
         inner.grid_columnconfigure(0, weight=1)
         left = tk.Frame(inner, bg=card)
@@ -892,6 +1015,7 @@ def settings_window(parent, config_path: str, apply, on_close, topmost: bool = F
 
     foot = tk.Frame(win, bg=bg)
     foot.pack(fill="x", pady=(f(24), 0))
+    footer_built.append(foot)
     status = tk.Label(foot, text="Changes are saved as you make them.", bg=bg, fg=dim, font=caption)
 
     def button(key, text, command, primary=False):
@@ -915,10 +1039,14 @@ def settings_window(parent, config_path: str, apply, on_close, topmost: bool = F
     win.protocol("WM_DELETE_WINDOW", close)
 
     refresh()
-    win.update_idletasks()
+    for _ in range(3):       # the cards measure themselves with their controls in; then the view takes
+        win.update_idletasks()   # their size
+        for cv in cards:
+            cv.fit()
+        win.update_idletasks()
+        sync()
     w, h = win.winfo_reqwidth(), win.winfo_reqheight()
-    mx, my, mw, mh = monitor_under_cursor()
-    win.geometry(f"+{mx + (mw - w) // 2}+{my + (mh - h) // 2}")
+    win.geometry(f"+{mx + (mw - w) // 2}+{my + max(0, (mh - h) // 2 - f(20))}")
     win.attributes("-alpha", 0.0)
     win.deiconify()
     log.info("settings dark title bar: %s", dark_title_bar(win))
@@ -1185,10 +1313,10 @@ def start_window(last_session: list, incoming: queue.Queue, checker: "updates.Ch
             root.geometry(f"{w}x{max(1, root.winfo_height() - gone)}")
 
         pin = Button(inner, star_text(), toggle, m, kind="subtle", width=icon, height=icon, behind=CARD,
-                     font=star_font or m.body, fg=ACCENT if state["pinned"] else DIM, takefocus=0)
+                     font=star_font or m.body, fg=ACCENT if state["pinned"] else DIM)
         pin.grid(row=0, column=1, padx=(0, f(2)))
         cross = Button(inner, "" if star_font else "✕", drop_row, m, kind="subtle", width=icon,
-                       height=icon, behind=CARD, font=icon_font(root, f(12)) or m.caption, fg=DIM, takefocus=0)
+                       height=icon, behind=CARD, font=icon_font(root, f(12)) or m.caption, fg=DIM)
         cross.grid(row=0, column=2)
         row.wire()
         buttons[f"recent{i}"], buttons[f"pin{i}"], buttons[f"forget{i}"] = row, pin, cross
@@ -1263,9 +1391,9 @@ def start_window(last_session: list, incoming: queue.Queue, checker: "updates.Ch
         root.geometry(f"{w}x{max(h, root.winfo_reqheight())}")
 
     def show_update(found):
-        """Fluent's info bar: a card with an accent edge, the news, and a Download button."""
+        """Fluent's info bar: a card with an accent edge, the news, and a Download button, above the footer."""
         bar, inner = card_frame(root, m, accent_edge=True, min_h=f(48))
-        bar.pack(fill="x", pady=(f(12), 0))
+        bar.pack(fill="x", pady=(f(8), 0), before=footer)       # a banner above the footer
         inner.grid_columnconfigure(0, weight=1)
         tk.Label(inner, text=f"Tessera Wall {found['version']} is available.", bg=CARD, fg=FG, font=m.body,
                  anchor="w").grid(row=0, column=0, sticky="w")

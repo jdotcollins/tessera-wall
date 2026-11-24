@@ -224,7 +224,10 @@ folder on the development PC still has the old name; nothing depends on it.
   icon font (`icon_font()`: Segoe Fluent Icons, or Segoe MDL2 Assets on Windows 10), with plain-text
   fallbacks. Only the native file and folder pickers and the fatal-error box are left unstyled.
   A card sizes itself in `wire()`: one first laid out below a window's edge would otherwise never get
-  its real height. **Use these for any new window or control rather than plain tk widgets.**
+  its real height.
+  A clickable card takes the keyboard focus (Tab; a 2 px light outline) and Space or Enter click it.
+  Settings sits in a canvas that scrolls (wheel, a thin bar, Tab scrolls the focused control into view)
+  only when the screen is too short for it; it calls every card's `fit()` before sizing the window. **Use these for any new window or control rather than plain tk widgets.**
 - Look and feel (checked by `tests/look_test.py`, `start_test.py`, `settings_test.py` and screenshots):
   - Gutters and focus outline: each tile's frame is placed `TILE_GAP // 2` px inside its layout rect
     (`Wall.animate`); the layout maths and logged rects are unchanged. `Wall.ring`, a blue frame below
@@ -392,7 +395,8 @@ folder on the development PC still has the old name; nothing depends on it.
   {source, title, pinned, used}: pinned ones are kept, unpinned ones only the latest `RECENT_KEEP` (20).
   The start window lists every pinned one, then recent ones up to `RECENT_SHOWN` (6), each with a star
   (`set_pinned`) and a cross (`forget`); the top bar's *Recent* menu (`Wall.recent_menu`, shown once
-  something is remembered) lists up to 12 and puts the pick into `incoming`, like pasting its link.
+  something is remembered) lists up to 12 and puts the pick into `incoming`, like pasting its link; its
+  star pins or unpins without closing the list (`popup_list`'s `on_mark`).
 - Channel videos as a feed. `mode_of(t)`: source videos follow `source_end` (`source_when_finished`,
   default random; E while pointing at one), others `end_mode`; loop-file is set per player. Switching by
   page link costs 3.4-4.1 s (mpv's hook runs yt-dlp + Deno). So `prepare_next` picks each source video's

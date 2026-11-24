@@ -31,8 +31,8 @@ import resources
 import sources
 import templates
 import ytdlp
-from ui import (BG, CTL, DIM, FG, Button, ask_text, fade, hover, key_chip, metrics_for, paste_async, popup_list,
-                round_corners, settings_window)
+from ui import (ACCENT, BG, CTL, DIM, FG, Button, ask_text, fade, hover, icon_font, key_chip, metrics_for,
+                paste_async, popup_list, round_corners, settings_window)
 from winapi import GA_ROOT, pictures_folder, user32
 
 log = logging.getLogger("tesserawall")
@@ -1044,24 +1044,34 @@ class Wall:
 
     def recent_menu(self, anchor: tk.Widget):
         """Top bar: the recent and pinned channels, playlists and searches; picking one adds videos from
-        it, like pasting its link. Pins are set in the start window. A themed list (ui.popup_list) below
+        it, like pasting its link. The star in front of each pins or unpins it (the list stays open);
+        pinned ones stay listed first, here and in the start window. A themed list (ui.popup_list) below
         the button; the bar stays while it is open."""
+        m = metrics_for(self.root)
         items = sources.recent(self.config_path, limit=12)
         x, y = anchor.winfo_rootx(), anchor.winfo_rooty() + anchor.winfo_height() + 4
         log.info("recent menu: %d item(s) at %d,%d", len(items), x, y)
-        star = "\u2605"
+        star_font = icon_font(self.root, m.f(14))
+        on, off = ("", "") if star_font else ("★", "☆")   # filled / outline star
 
         def pick(s):
             log.info("recent picked: %s", s)
             self.incoming.put(s)
+
+        def pin_toggle(d):
+            d["pinned"] = not d.get("pinned")
+            sources.set_pinned(self.config_path, d["source"], d["pinned"])
+            log.info("recent menu %s %s", "pinned" if d["pinned"] else "unpinned", d["source"])
+            return (on, ACCENT) if d["pinned"] else (off, DIM)
 
         def closed():
             self.dialog_open = False
             self.hide_topbar()
         self.dialog_open = True                          # keeps the bar alive while the list is open
         popup_list(self.topbar, x, y, [(sources.menu_name(d["source"], d.get("title")),
-                                        star if d.get("pinned") else "", lambda s=d["source"]: pick(s))
-                                       for d in items], metrics_for(self.root), on_close=closed)
+                                        (on, ACCENT) if d.get("pinned") else (off, DIM),
+                                        lambda s=d["source"]: pick(s), lambda d=d: pin_toggle(d))
+                                       for d in items], m, on_close=closed, mark_font=star_font)
 
     # ---- files that would not play --------------------------------------------
     def open_failed(self, path: str):

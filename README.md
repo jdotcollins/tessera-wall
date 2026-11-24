@@ -86,8 +86,8 @@ fetched again after an hour instead of a day.
 
 **Recent and pinned.** The channels, playlists and searches you open are remembered: the start window
 lists the latest ones under *Channels and searches*, and the menu bar's *Recent* opens one in the wall.
-Click the star next to one in the start window to pin it, so it stays at the top of both lists; the cross
-removes one.
+Click the star next to one, in either list, to pin it, so it stays at the top of both; the cross in the
+start window removes one.
 
 To keep data use down, each video asks for a quality that suits its share of the screen (720p with
 six on a 1440p monitor), never above `stream_max_height`.
