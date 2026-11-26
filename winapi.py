@@ -84,6 +84,28 @@ def read_clipboard() -> tuple[str, list]:
     return text, files
 
 
+SPI_GETCLIENTAREAANIMATION = 0x1042
+_anim = {"on": True, "at": -1e9}
+
+
+def animations_enabled() -> bool:
+    """Windows' "Animation effects" (Settings > Accessibility > Visual effects). Off asks apps not to animate
+    their own windows. Read again at most every 5 s, so changing it applies without a restart."""
+    import time
+    now = time.monotonic()
+    if now - _anim["at"] > 5:
+        _anim["at"] = now
+        on = wintypes.BOOL(True)
+        try:
+            if user32.SystemParametersInfoW(SPI_GETCLIENTAREAANIMATION, 0, ctypes.byref(on), 0):
+                if bool(on.value) != _anim["on"]:
+                    log.info("Windows animation effects: %s", "on" if on.value else "off")
+                _anim["on"] = bool(on.value)
+        except Exception as e:
+            log.info("animation setting lookup failed: %s", e)
+    return _anim["on"]
+
+
 def monitor_under_cursor() -> tuple[int, int, int, int]:
     """(x, y, width, height) in real pixels of the monitor the pointer is on."""
     user32.MonitorFromPoint.restype = wintypes.HANDLE

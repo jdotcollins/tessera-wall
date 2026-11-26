@@ -320,7 +320,18 @@ folder on the development PC still has the old name; nothing depends on it.
     `--keep-open=yes` mpv pauses on the last frame and pushes `eof-reached=true`. `tick` sees it (newer
     than the tile's `swap_seq`, file fully loaded) and calls `Wall.advance`: `pick_file` (shared with
     Page Down/Up and N; shape-filtered in a template wall), `load_into` without the file-name text on
-    unfocused tiles, then unpause. No other file free: seek to 0 and play again.
+    unfocused tiles, then unpause. No other file free: seek to 0 and play again. `stop` also uses
+    `--loop-file=no` but is not in `MOVES_ON`, so `tick` leaves the player paused on its last frame (and
+    Move on / `prepare_next` treat it like `loop`).
+  - Audio lock (`K`): `Wall.audio_lock` is a tile that keeps the sound while focus moves; `heard()` (lock,
+    else focus) drives `update_audio` and Up/Down. Cleared by `K`, `0` and `remove()`; Move on and `-`
+    skip the locked tile.
+  - Launch hint: shown on the first `HINT_WALLS` walls, counted in `state.json` beside the settings file
+    (`files.read_state` / `write_state`); opening the controls list (H) retires it. `hint_shown` is set at
+    the launch moment even when no hint is shown, because the update notice waits for it.
+  - Animations (`animations` setting, `ui.motion()`): `system` (default) follows Windows' "Animation
+    effects" (`winapi.animations_enabled`, re-read every 5 s), `on` / `off` override it. Off: the re-tile
+    animation and window fades snap.
   - Move on (`switch_seconds`, Ctrl+E, Settings) and random start (`random_start`): every tile gets a
     `switch_due` time (switch_seconds ±25 %, so the wall does not change all at once) when added and on
     every `load_into`; `tick` calls `Wall.timed_switch`, which skips the focused tile and sync mode

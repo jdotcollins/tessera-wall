@@ -41,6 +41,8 @@ SETTINGS = [
     ("mpv", "VIDEO_EXTS", {".mp4", ".mkv", ".webm", ".mov", ".avi", ".m4v", ".wmv", ".flv", ".ts", ".m2ts",
                            ".mpg", ".mpeg", ".gif", ".y4m"},
      "File types picked up when you open a folder."),
+    ("mpv", "INCLUDE_SUBFOLDERS", False,
+     "Opening or adding a folder also takes the videos in its subfolders (at most 5000 files)."),
 
     ("layout", "LAYOUT_MODE", "grow",
      'Starting layout (L cycles it): "grow" = hovered video enlarges, "flat" = best fit, nothing moves,\n'
@@ -56,6 +58,9 @@ SETTINGS = [
 
     ("hover", "HOVER_DELAY_MS", 120, "The pointer must rest on a video this long before focus switches."),
     ("hover", "ANIM_MS", 140, "Length of the re-tile animation. 0 = snap instantly."),
+    ("hover", "ANIMATIONS", "system",
+     'Moving and fading on screen: "system" follows Windows\' "Animation effects" (Settings >\n'
+     'Accessibility > Visual effects), "on" always animates, "off" never does (videos snap into place).'),
     ("hover", "TICK_MS", 33, "How often the wall checks the pointer, in milliseconds."),
     ("hover", "CURSOR_HIDE_SECONDS", 2.0, "Hide the pointer after this long without movement. 0 = never."),
     ("hover", "DRAG_THRESHOLD", 40, "Pixels the pointer must travel with the button held before a click becomes a drag."),
@@ -84,19 +89,22 @@ SETTINGS = [
     ("controls", "SEEK_SECONDS", 5, "Seek step for the arrow keys and wheel."),
     ("controls", "SOURCE_WHEN_FINISHED", "random",
      'What a video from a channel or playlist does when it ends: "random" (another from it), "next" (the\n'
-     'next in it) or "loop". E switches it while pointing at such a video.'),
+     'next in it), "loop" or "stop" (stay on its last frame). E switches it while pointing at such a video.'),
     ("controls", "WHEN_FINISHED", "loop",
-     'What a video does when it ends: "loop" (play it again), "next" (the next file in its folder) or\n'
-     '"random" (a random file from its folder). E in the wall switches between them.'),
+     'What a video does when it ends: "loop" (play it again), "next" (the next file in its folder),\n'
+     '"random" (a random file from its folder) or "stop" (stay on its last frame). E in the wall switches\n'
+     'between them.'),
     ("controls", "SWITCH_SECONDS", 0,
      "Move each video on to another file after about this many seconds (0 = never): the next or a random\n"
-     "file, as set by when_finished (random if that is \"loop\"). The video you point at stays. Ctrl+E cycles."),
+     "file, as set by when_finished (random if that is \"loop\" or \"stop\"). The video you point at stays.\n"
+     "Ctrl+E cycles."),
     ("controls", "RANDOM_START", False,
      "Start each video at a random point (5-80 % through) instead of the beginning. Saved walls and\n"
      "sessions still reopen where they were."),
     ("controls", "HELP_OPACITY", 0.94, "Controls list (H): 1 = solid, lower lets the videos show through."),
     ("controls", "SNAPSHOT_DIR", "", 'Folder for snapshots (P). Empty = "Tessera Wall" in your Pictures folder.'),
-    ("controls", "SHOW_HELP_HINT", True, 'Show "Press H for controls" briefly at launch.'),
+    ("controls", "SHOW_HELP_HINT", True,
+     "Show a short controls hint when a wall opens: on the first 5 walls, or until you press H."),
 
     ("updates", "UPDATE_CHECK", True,
      "Once a week, ask GitHub whether a newer Tessera Wall exists and show a notice if so. Sends only that\n"

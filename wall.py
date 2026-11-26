@@ -25,13 +25,13 @@ from layout import layout
 from layout import clamp_pan, drawn_size, magnify_at, panscan_for
 import config as C
 import updates
-from files import expand, save_wall
+from files import expand, read_state, save_wall, write_state
 import probe
 import resources
 import sources
 import templates
 import ytdlp
-from ui import (ACCENT, BG, CTL, DIM, FG, Button, ask_text, fade, hover, icon_font, key_chip, metrics_for,
+from ui import (ACCENT, BG, CTL, DIM, FG, Button, ask_text, fade, hover, icon_font, key_chip, metrics_for, motion,
                 paste_async, popup_list, round_corners, settings_window)
 from winapi import GA_ROOT, end_with_app, pictures_folder, user32
 
@@ -63,17 +63,18 @@ HELP_SECTIONS = [
         (["+", "-"], "One more video from the same folder / one fewer"),
         (["Z"], "Focused video back to normal size (after Ctrl+wheel)"),
         (["I"], "Clean mode: hide outline, progress line, menus and messages"),
-        (["0"], "Unpin, unfocus and mute everything"),
+        (["0"], "Unpin, unfocus, release K and mute everything"),
     ]),
     ("Playback", [
         (["Space"], "Pause the focused video"),
         (["Shift+Space"], "Pause or resume all"),
         (["Left", "Right"], "Seek; with Shift, seek every video"),
-        (["Up", "Down"], "Volume of the focused video"),
+        (["Up", "Down"], "Volume of the video you hear"),
+        (["K"], "Keep the sound on this video while you point at others (again to release)"),
         (["R"], "Restart all from the beginning"),
         (["Page Down", "Page Up"], "Next / previous file from its folder"),
         (["N"], "Swap for a random file from its folder"),
-        (["E"], "When a video ends: play again, next, random (its own for channel videos)"),
+        (["E"], "When a video ends: play again, next, random, stop (its own for channel videos)"),
         (["Ctrl+E"], "Move on to another file every 30 s / 1 min / 2 min / never"),
         (["G"], "Sync: every video follows the focused one (again to stop)"),
         (["Ctrl+G"], "Sync, keeping each video's current time difference"),
@@ -109,8 +110,12 @@ LAYOUT_MODES = ("grow", "flat", "grid")
 CROP_MODES = ("limited", "fill", "fit")
 MODE_WORDS = {"Arrangement": {"grow": "grow on hover", "flat": "best fit", "grid": "even grid"},   # as in Settings
               "Black bars": {"limited": "crop a little", "fill": "crop to fill", "fit": "never crop"}}
-END_MODES = ("loop", "next", "random")
-END_LABELS = {"loop": "play it again", "next": "next file in its folder", "random": "random file from its folder"}
+END_MODES = ("loop", "next", "random", "stop")
+END_LABELS = {"loop": "play it again", "next": "next file in its folder", "random": "random file from its folder",
+              "stop": "stop at the end"}
+MOVES_ON = ("next", "random")   # end modes that load another video; "loop" and "stop" keep the same one
+HINT_TEXT = "Point at a video to hear it     H: controls     Top edge: menu     Esc: exit"
+HINT_WALLS = 5           # the launch hint shows on this many walls, or until H is pressed
 CONNECT_TIMEOUT = 15.0   # seconds for mpv to create its IPC pipe
 ASPECT_TIMEOUT = 10.0    # seconds to wait for a video size before keeping the 16:9 guess
 MAG_STEP = 0.25          # Ctrl+wheel: magnification per notch, as mpv's video-zoom (log2): x1.19
@@ -177,6 +182,7 @@ class Wall:
         self.need_layout = False
         self.closing = False
         self.pin: Tile | None = None      # clicked tile: hover cannot take focus away from it
+        self.audio_lock: Tile | None = None   # K: this tile keeps the sound while focus moves elsewhere
         self.zoom = False                 # pinned tile takes most of the screen
         self.click_was_zoomed = False     # state before the first click of a double-click
         self.press_in_bar = False         # current mouse press started on the seek bar
@@ -405,6 +411,9 @@ class Wall:
             self.candidate = None
         if self.pin is tile:
             self.pin, self.zoom = None, False
+        if self.audio_lock is tile:
+            self.audio_lock = None
+            log.info("audio lock off (its video closed)")
         if self.bar_tile is tile:
             self.bar_tile = None
         self.need_layout = True
@@ -475,7 +484,8 @@ class Wall:
         """Move frames towards their targets. Returns True while still animating."""
         if self.anim_start is None or self.blanked is not None:   # blacked out: frames stay hidden
             return False
-        p = 1.0 if C.ANIM_MS <= 0 else min(1.0, (time.monotonic() - self.anim_start) * 1000 / C.ANIM_MS)
+        p = 1.0 if C.ANIM_MS <= 0 or not motion() \
+            else min(1.0, (time.monotonic() - self.anim_start) * 1000 / C.ANIM_MS)
         e = 1 - (1 - p) ** 3
         for t in self.tiles:
             s, g = t.start, t.target
@@ -689,12 +699,35 @@ class Wall:
         self.relayout(rearrange=True)
 
     # ---- audio -------------------------------------------------------------
+    def heard(self) -> Tile | None:
+        """The video whose sound plays: the locked one (K), else the focused one."""
+        return self.audio_lock or self.focus
+
+    def toggle_audio_lock(self):
+        """K: keep the sound on the focused video (or the locked one) while pointing at others; again to
+        let it follow the pointer."""
+        if self.audio_lock:
+            t, self.audio_lock = self.audio_lock, None
+            log.info("audio lock off")
+            target = self.focus or t
+            if target.ipc:
+                target.ipc.post("show-text", "Sound follows the pointer", 1500)
+            return
+        t = self.focus
+        if not t or not t.ipc:
+            self.announce("Point at a video first, then K keeps its sound")
+            return
+        self.audio_lock = t
+        log.info("audio lock -> %s", self.tiles.index(t))
+        t.ipc.post("show-text", "Sound stays on this video (K to release)", 2000)
+
     def update_audio(self, dt: float) -> bool:
-        """Crossfade: move every tile's gain towards 1 (focused) or 0. Returns True while fading."""
+        """Crossfade: move every tile's gain towards 1 (the one heard) or 0. Returns True while fading."""
         step = 1.0 if C.CROSSFADE_MS <= 0 else dt * 1000 / C.CROSSFADE_MS
         fading = False
+        heard = self.heard()
         for t in self.tiles:
-            target = 1.0 if t is self.focus and self.blanked is None else 0.0
+            target = 1.0 if t is heard and self.blanked is None else 0.0
             if t.gain == target or not t.ipc:
                 continue
             if t.gain == 0.0:                      # about to become audible: start from silence
@@ -710,7 +743,7 @@ class Wall:
         return fading
 
     def change_volume(self, delta):
-        t = self.focus
+        t = self.heard()
         if t and t.ipc:
             t.volume = max(0, min(C.MAX_VOLUME, t.volume + delta))
             if t.gain == 1.0:
@@ -809,11 +842,12 @@ class Wall:
 
     def timed_switch(self, t: Tile, now: float):
         """t's time is up: load the next or a random file (as when_finished says; random if that is loop).
-        Not the video being pointed at, and not in sync mode: those get checked again a little later."""
-        if t is self.focus or self.sync or self.blanked is not None or not t.ipc:
+        Not the video being pointed at or listened to (K), and not in sync mode: those get checked again a
+        little later."""
+        if t is self.focus or t is self.audio_lock or self.sync or self.blanked is not None or not t.ipc:
             t.switch_due = now + 5
             return
-        how = self.mode_of(t) if self.mode_of(t) != "loop" else "random"
+        how = self.mode_of(t) if self.mode_of(t) in MOVES_ON else "random"
         ready = self.take_ready(t, how)
         new = ready["url"] if ready else self.pick_file(t, how)
         if new:
@@ -860,7 +894,8 @@ class Wall:
     def set_source_end(self, mode: str, announce: bool = False):
         self.source_end = mode
         log.info("when a channel video ends -> %s", mode)
-        label = {"loop": "play it again", "next": "the next in it", "random": "another from it"}[mode]
+        label = {"loop": "play it again", "next": "the next in it", "random": "another from it",
+                 "stop": "stop at the end"}[mode]
         for t in self.tiles:
             if t.ipc and t.pool:
                 t.ipc.set_async("loop-file", self.loop_file(t.pool))
@@ -905,9 +940,23 @@ class Wall:
         t.opened_at = 0.0                            # a link starts at 0 (start= above), for link_stalled
         self.bar_next = 0.0
 
+    def hint_due(self) -> bool:
+        """Show the launch hint on this wall? On the first HINT_WALLS walls (counted in state.json), never
+        once H has been pressed, never with the setting off. Counts this wall when it says yes."""
+        if not C.SHOW_HELP_HINT:
+            return False
+        shown = read_state(self.config_path).get("hint_walls", 0)
+        if not isinstance(shown, int) or shown >= HINT_WALLS:
+            return False
+        write_state(self.config_path, hint_walls=shown + 1)
+        return True
+
     def toggle_help(self):
         """Show/hide the controls list. It is its own always-on-top window, so it is drawn above the
-        videos whatever presentation mode mpv uses; while the pointer is on it, hover is suspended."""
+        videos whatever presentation mode mpv uses; while the pointer is on it, hover is suspended.
+        Opening it retires the launch hint: it has done its job."""
+        if not self.help and read_state(self.config_path).get("hint_walls", 0) != HINT_WALLS:
+            write_state(self.config_path, hint_walls=HINT_WALLS)
         if self.help:
             win = self.help
             self.help = None
@@ -1030,19 +1079,21 @@ class Wall:
         tk.Label(row, text="Tessera Wall", bg=BG, fg=DIM, font=m.strong).pack(side="left", padx=(f(8), f(12)))
         rects = {}
 
-        def button(key, text, command, side="left", danger=False):
-            b = Button(row, text, command, m, kind="subtle", danger=danger, takefocus=1 if keyboard else 0)
+        def button(key, text, command, side="left", danger=False, shortcut=None):
+            b = Button(row, text, command, m, kind="subtle", danger=danger, takefocus=1 if keyboard else 0,
+                       shortcut=shortcut)
             b.pack(side=side, padx=(0, f(2)) if side == "left" else (f(2), 0))
             rects[key] = b
 
-        button("add", "Add videos…", lambda: self.add_from_dialog(folder=False))
-        button("folder", "Add a folder…", lambda: self.add_from_dialog(folder=True))
-        button("search", "Search YouTube…", self.search_from_dialog)
+        # Each shows its key, so the menu teaches the keyboard (as bind_keys and the controls list do).
+        button("add", "Add videos…", lambda: self.add_from_dialog(folder=False), shortcut="Ctrl+O")
+        button("folder", "Add a folder…", lambda: self.add_from_dialog(folder=True), shortcut="Ctrl+Shift+O")
+        button("search", "Search YouTube…", self.search_from_dialog, shortcut="Ctrl+F")
         if sources.recent(self.config_path, limit=1):
             button("recent", "Recent ▾", lambda: self.recent_menu(rects["recent"]))
-        button("controls", "Controls", lambda: (self.hide_topbar(), self.toggle_help()))
-        button("save", "Save wall\u2026", lambda: (self.hide_topbar(), self.save_wall_as()))
-        button("settings", "Settings", lambda: (self.hide_topbar(), self.toggle_settings()))
+        button("controls", "Controls", lambda: (self.hide_topbar(), self.toggle_help()), shortcut="H")
+        button("save", "Save wall\u2026", lambda: (self.hide_topbar(), self.save_wall_as()), shortcut="Ctrl+S")
+        button("settings", "Settings", lambda: (self.hide_topbar(), self.toggle_settings()), shortcut="S")
         button("close", "Close  ✕", self.quit, side="right", danger=True)
         bar.update_idletasks()
         bar.geometry(f"{self.W}x{bar.winfo_reqheight()}+{self.root.winfo_rootx()}+{self.root.winfo_rooty()}")
@@ -1249,7 +1300,7 @@ class Wall:
             if t.ready and now - t.ready["at"] > 7200:
                 t.ready = None
             mode = self.mode_of(t)
-            how = mode if mode != "loop" else ("random" if self.switch_seconds else None)
+            how = mode if mode in MOVES_ON else ("random" if self.switch_seconds else None)
             if t.ready or not how:
                 continue
             url = self.pick_file(t, how)
@@ -1547,16 +1598,22 @@ class Wall:
                     t.osd = 0 if (self.clean or not C.SHOW_MESSAGES) else 1
                     t.ipc.set_async("osd-level", t.osd)   # before the hint below, which it may silence
                     self.need_layout = True  # so panscan gets sent
-                    if not self.hint_shown and (self.notice or C.SHOW_HELP_HINT):
-                        self.hint_shown = True   # a startup problem with the settings file wins over the hint
-                        t.ipc.post("show-text", self.notice or "H: controls     Esc: exit     Top edge: menu", 8000 if self.notice else 4000)
+                    if not self.hint_shown:
+                        # The launch moment, once per wall: a startup problem with the settings file wins
+                        # over the hint. hint_shown is set even when nothing is shown: the update notice
+                        # waits for it.
+                        self.hint_shown = True
+                        if self.notice:
+                            t.ipc.post("show-text", self.notice, 8000)
+                        elif self.hint_due():
+                            t.ipc.post("show-text", HINT_TEXT, 5000)
                 except OSError:
                     if now - t.born > CONNECT_TIMEOUT:
                         self.remove(t, "no IPC connection")
             elif "://" in t.path and t.aspect_known and self.link_stalled(t, now):
                 self.open_failed(t.path)
                 self.remove(t, "the link ended without playing")
-            elif t.aspect_known and self.mode_of(t) != "loop" and t.ipc.value("eof-reached") \
+            elif t.aspect_known and self.mode_of(t) in MOVES_ON and t.ipc.value("eof-reached") \
                     and t.ipc.value_seq("eof-reached") > t.swap_seq:
                 self.advance(t)          # it ended (keep-open paused it on its last frame): next / random file
             elif t.aspect_known and t.switch_due and now >= t.switch_due:
@@ -1763,7 +1820,8 @@ class Wall:
         """-: close the last video that is not the focused one (never the last video left)."""
         if len(self.tiles) <= 1:
             return
-        others = [t for t in self.tiles if t is not self.focus]
+        others = [t for t in self.tiles if t is not self.focus and t is not self.audio_lock] \
+            or [t for t in self.tiles if t is not self.focus]
         self.remove(others[-1], "one fewer (minus key)")
 
     def toggle_blackout(self):
@@ -1921,7 +1979,7 @@ class Wall:
         self.bar_next = 0.0
 
     def reset(self):
-        self.pin, self.zoom = None, False
+        self.pin, self.zoom, self.audio_lock = None, False, None
         self.set_focus(None)
 
     def bind_keys(self):
@@ -1952,6 +2010,7 @@ class Wall:
         b("<Up>", lambda e: self.change_volume(C.VOLUME_STEP))
         b("<Down>", lambda e: self.change_volume(-C.VOLUME_STEP))
         b("<n>", lambda e: self.swap_random())
+        b("<k>", lambda e: self.toggle_audio_lock())
         b("<e>", lambda e: self.cycle_end_mode())
         for seq in ("<Control-e>", "<Control-E>"):   # not Shift+E: that is E with Caps Lock to tk
             bind_all(seq, lambda e: None if self.dialog_open else self.cycle_switch())

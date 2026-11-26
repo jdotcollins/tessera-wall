@@ -13,6 +13,26 @@ log = logging.getLogger("tesserawall")
 
 
 SESSION_PATH = os.path.join(os.environ.get("APPDATA") or tempfile.gettempdir(), "TesseraWall", "session.json")
+SUBFOLDER_LIMIT = 5000      # include_subfolders: most files one folder gives, so a whole drive cannot hang the app
+SUBFOLDER_SECONDS = 3.0     # ... and the longest it may spend looking
+SKIP_DIRS = {"$recycle.bin", "system volume information"}
+
+
+def folder_videos(folder: str, subfolders: bool) -> list[str]:
+    """The videos in a folder, by name; with subfolders, then those of each subfolder in turn (by name,
+    depth first), up to SUBFOLDER_LIMIT files or SUBFOLDER_SECONDS. Hidden (.name) folders are skipped."""
+    import time
+    out, deadline = [], time.monotonic() + SUBFOLDER_SECONDS
+    for here, dirs, names in os.walk(folder):
+        dirs[:] = sorted((d for d in dirs if not d.startswith(".") and d.lower() not in SKIP_DIRS),
+                         key=str.lower) if subfolders else []
+        for name in sorted(names, key=str.lower):
+            if os.path.splitext(name)[1].lower() in C.VIDEO_EXTS:
+                out.append(os.path.abspath(os.path.join(here, name)))
+        if subfolders and (len(out) >= SUBFOLDER_LIMIT or time.monotonic() > deadline):
+            log.info("subfolders of %s: stopped at %d files", folder, len(out))
+            return out[:SUBFOLDER_LIMIT]
+    return out
 
 
 def expand(args: list[str]) -> list[str]:
@@ -26,13 +46,32 @@ def expand(args: list[str]) -> list[str]:
             if link:
                 out.append(link)
         elif os.path.isdir(a):
-            for name in sorted(os.listdir(a), key=str.lower):
-                full = os.path.join(a, name)
-                if os.path.isfile(full) and os.path.splitext(name)[1].lower() in C.VIDEO_EXTS:
-                    out.append(os.path.abspath(full))
+            out += folder_videos(a, C.INCLUDE_SUBFOLDERS)
         elif os.path.isfile(a):
             out.append(os.path.abspath(a))
     return out
+
+
+def read_state(config_path: str) -> dict:
+    """Small things the app remembers between runs (not settings): state.json beside the settings file."""
+    try:
+        with open(os.path.join(os.path.dirname(os.path.abspath(config_path)), "state.json"), encoding="utf-8") as f:
+            data = json.load(f)
+        return data if isinstance(data, dict) else {}
+    except (OSError, ValueError):
+        return {}
+
+
+def write_state(config_path: str, **values) -> None:
+    path = os.path.join(os.path.dirname(os.path.abspath(config_path)), "state.json")
+    data = read_state(config_path)
+    data.update(values)
+    try:
+        os.makedirs(os.path.dirname(path), exist_ok=True)
+        with open(path, "w", encoding="utf-8") as f:
+            json.dump(data, f)
+    except OSError as e:
+        log.info("could not save %s: %s", path, e)
 
 
 def walls_dir(config_path: str) -> str:

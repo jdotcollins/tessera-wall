@@ -12,7 +12,7 @@ import config as C
 import updates
 from files import expand, list_walls
 from ytdlp import links_from_text
-from winapi import GA_ROOT, monitor_under_cursor, read_clipboard, user32
+from winapi import GA_ROOT, animations_enabled, monitor_under_cursor, read_clipboard, user32
 
 log = logging.getLogger("tesserawall")
 
@@ -95,14 +95,24 @@ def dark_title_bar(win) -> bool:
         return False
 
 
+def motion() -> bool:
+    """Animate? The animations setting: "on", "off", or (default) whatever Windows' Animation effects says."""
+    if C.ANIMATIONS == "on":
+        return True
+    if C.ANIMATIONS == "off":
+        return False
+    return animations_enabled()
+
+
 def fade(win, to: float, ms: int, then=None):
     """Change a window's opacity smoothly, then run `then`. Quietly stops if the window is gone.
-    Ending at 1.0 makes the window opaque again (tk drops the layered style), which screen capture needs."""
+    Ending at 1.0 makes the window opaque again (tk drops the layered style), which screen capture needs.
+    With animations off (motion()) it changes in one step."""
     try:
         start = float(win.attributes("-alpha"))
     except tk.TclError:
         return
-    steps = max(1, ms // 15)
+    steps = max(1, ms // 15) if motion() else 1
 
     def step(i):
         try:
@@ -171,12 +181,16 @@ SETTINGS_UI = [
     ("section", "Layout"),
     ("choice", "LAYOUT_MODE", "Arrangement", [("grow", "Grow on hover"), ("flat", "Best fit"), ("grid", "Even grid")]),
     ("choice", "CROP_MODE", "Black bars", [("limited", "Crop a little"), ("fill", "Crop to fill"), ("fit", "Never crop")]),
+    ("choice", "ANIMATIONS", "Animations", [("system", "Follow Windows"), ("on", "Always"), ("off", "Never")],
+     {"hint": "Videos moving into place, windows fading"}),
     ("section", "Playing"),
-    ("choice", "WHEN_FINISHED", "When a video ends", [("loop", "Play it again"), ("next", "Next"), ("random", "Random")],
+    ("choice", "WHEN_FINISHED", "When a video ends",
+     [("loop", "Play it again"), ("next", "Next"), ("random", "Random"), ("stop", "Stop")],
      {"hint": "Videos from files and folders"}),
     ("choice", "SWITCH_SECONDS", "Move on", [(0, "Never"), (30, "30 s"), (60, "1 min"), (120, "2 min")],
      {"hint": "Change a video after a while"}),
     ("check", "RANDOM_START", "Start at a random point"),
+    ("check", "INCLUDE_SUBFOLDERS", "Include subfolders", {"hint": "When you open or add a folder"}),
     ("section", "Other"),
     ("check", "UNFOCUSED_SKIP", "Save power", "nonref", "",
      {"hint": "The other videos play at a lower, choppy frame rate"}),
@@ -187,7 +201,7 @@ SETTINGS_UI = [
     ("scale", "SOURCE_COUNT", "Videos to open", 1, 24, 1, "{}", {"hint": "How many each one adds to the wall"}),
     ("choice", "SOURCE_ORDER", "Which ones", [("random", "At random"), ("newest", "Newest first")]),
     ("choice", "SOURCE_WHEN_FINISHED", "When one ends",
-     [("random", "Another"), ("next", "The next"), ("loop", "Play it again")]),
+     [("random", "Another"), ("next", "The next"), ("loop", "Play it again"), ("stop", "Stop")]),
     ("section", "On screen"),
     ("check", "CLEAN_MODE", "Clean mode", {"hint": "Only the videos: overrides the greyed-out ones. I in the wall"}),
     ("check", "FOCUS_OUTLINE", "Outline", {"hint": "Around the video you point at", "clean": True}),
@@ -347,18 +361,21 @@ class Button(tk.Canvas):
     """Fluent's button, drawn: `kind` "accent" (the main action), "standard" (outlined) or "subtle" (no fill
     until pointed at, for bars and icons). width=None fits the text (at least 120 px, except subtle);
     width="fill" takes the width it is given. Acts on release, like a native button; Space or Enter act
-    when it has the keyboard focus."""
+    when it has the keyboard focus. `shortcut` ("Ctrl+O") is drawn after the text in a quieter colour,
+    as menus show their keys."""
 
     def __init__(self, parent, text, command, m: Metrics, kind="standard", width=None, height=None,
-                 behind=BG, font=None, danger=False, takefocus=1, fg=None):
+                 behind=BG, font=None, danger=False, takefocus=1, fg=None, shortcut=None):
         self.m, self.kind, self.text, self.command, self.fg = m, kind, text, command, fg
-        self.behind, self.danger, self.enabled = behind, danger, True
+        self.behind, self.danger, self.enabled, self.shortcut = behind, danger, True, shortcut
         self.font = font or (m.strong if kind == "accent" else m.body)
         self.fill_w = width == "fill"
         h = height or m.control_h
+        self.text_w = m.measure(parent, text, self.font)
+        self.key_w = m.measure(parent, shortcut, self.font) + m.f(10) if shortcut else 0
         if width is None or self.fill_w:
             least = 0 if kind == "subtle" else m.f(120)
-            width = max(least, m.measure(parent, text, self.font) + 2 * m.f(12))
+            width = max(least, self.text_w + self.key_w + 2 * m.f(12))
         super().__init__(parent, width=width, height=h, bg=behind, highlightthickness=0, cursor="hand2",
                          takefocus=takefocus)
         self.state = {"hot": False, "down": False}
@@ -419,7 +436,14 @@ class Button(tk.Canvas):
             rounded(self, 0, 0, w, h, r, fill, self.behind, CTL, 1)
         elif hot:
             rounded(self, 0, 0, w, h, r, fill, self.behind)
-        self.create_text(w / 2, h / 2, text=self.text, font=self.font, fill=colour)
+        if self.shortcut:
+            x = (w - self.text_w - self.key_w) / 2
+            self.create_text(x, h / 2, text=self.text, font=self.font, fill=colour, anchor="w")
+            key = colour if (hot and self.danger) or not self.enabled else DIM
+            self.create_text(x + self.text_w + self.key_w, h / 2, text=self.shortcut, font=self.font, fill=key,
+                             anchor="e")
+        else:
+            self.create_text(w / 2, h / 2, text=self.text, font=self.font, fill=colour)
 
 
 def card_frame(parent, m: Metrics, behind=BG, click=None, min_h=None, accent_edge=False):

@@ -159,7 +159,7 @@ Settings, under *On screen*, where *Clean mode* makes every wall open that way.
 
 Press **H** in the wall for the list of controls, or rest the pointer on the top edge of the screen
 for a small menu bar with *Add videos*, *Add a folder*, *Search YouTube…*, *Recent*, *Controls*, *Save wall…*,
-*Settings* and *Close*. From the keyboard, **F10** opens the menu bar (arrows move, Enter picks, Esc closes);
+*Settings* and *Close*, each with its key shown. From the keyboard, **F10** opens the menu bar (arrows move, Enter picks, Esc closes);
 **Ctrl+O** adds videos, **Ctrl+Shift+O** a folder, and **Ctrl+F** searches YouTube.
 
 A wall holds up to 24 videos. Before opening each one, Tessera Wall estimates whether your graphics card
@@ -181,10 +181,11 @@ of the whole PC slowing to a crawl.
 | `Space` / `Shift+Space` | Pause the focused video / pause or resume all |
 | `Left` `Right` wheel | Seek the focused video; with `Shift`, seek all |
 | `R` | Restart all from the beginning |
-| `Up` `Down` | Volume of the focused video (remembered per video) |
+| `Up` `Down` | Volume of the video you hear (remembered per video) |
+| `K` | Keep the sound on the focused video while you point at others; again to let it follow the pointer |
 | `Page Down` / `Page Up` | Next / previous file from the focused video's folder |
 | `N` | Swap the focused video for a random one from its folder (same shape, in a template wall) |
-| `E` | When a video ends: play it again, play the next file in its folder, or a random one |
+| `E` | When a video ends: play it again, play the next file in its folder, a random one, or stop on its last frame |
 | `Ctrl+E` | Move every video on to another file after 30 s, 1 min, 2 min, or never (the one you point at stays) |
 | `G` | Sync: every video follows the focused one (pause, seek, speed, frame steps); again to stop |
 | `Ctrl+G` | Sync, but each video keeps its current time difference (cameras that started at different times) |
@@ -207,7 +208,7 @@ of the whole PC slowing to a crawl.
 | `U` | Open the download page, when a newer version is available |
 | `Z` | The focused video back to normal size after magnifying |
 | `I` | Clean mode: hide the outline, progress line, menu bar, messages and pointer (again to bring them back) |
-| `0` | Unpin, unfocus and mute everything |
+| `0` | Unpin, unfocus, release `K` and mute everything |
 | `Esc` | Close the controls list, else release pin/zoom, else quit |
 | `Q` | Quit and remember this session |
 | Pointer at the top edge | Menu bar: add videos, controls, save wall, settings, close |
