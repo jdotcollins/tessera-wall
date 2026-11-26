@@ -79,7 +79,8 @@ def main():
     try:
         p = launch([L, bad, L, L], 25); procs.append(p)
         r["bad_reported"] = wait_count("could not play: " + bad, 1, 8)
-        time.sleep(1.0)
+        wait_count("tile removed (could not play)", 1, 8)     # it keeps its place ~5 s, saying why
+        time.sleep(0.5)
         r["wall_still_running"] = p.poll() is None
         r["tiles_left"] = log_text().count("tile added") - log_text().count("tile removed")
 

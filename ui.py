@@ -633,12 +633,13 @@ def ask_text(parent, title: str, prompt: str, ok: str, initial: str = "", topmos
 
 
 def popup_list(parent, x: int, y: int, entries: list, m: Metrics, on_close=None, mark_font=None):
-    """A themed drop-down list at screen x, y (Fluent's menu flyout). Entries are (text, mark, action) or
-    (text, mark, action, on_mark): mark is a short glyph shown before the text, as a string (drawn in the
-    accent colour) or (glyph, colour), or "". Picking an entry runs its action and closes the list. With
-    on_mark, the mark is a button of its own: clicking it calls on_mark(), which returns the new mark, and
-    the list stays open (the Recent list's pin star). Up/Down move, Enter picks, Esc or a click elsewhere
-    closes. Returns the window."""
+    """A themed drop-down list at screen x, y (Fluent's menu flyout), kept inside the monitor. Entries are
+    (text, mark, action), (text, mark, action, on_mark) or (text, mark, action, on_mark, shortcut): mark is
+    a short glyph shown before the text, as a string (drawn in the accent colour) or (glyph, colour), or "".
+    Picking an entry runs its action and closes the list. With on_mark, the mark is a button of its own:
+    clicking it calls on_mark(), which returns the new mark, and the list stays open (the Recent list's pin
+    star). A shortcut ("Ctrl+O") is shown at the right, quieter. Up/Down move, Enter picks, Esc or a click
+    elsewhere closes. Returns the window."""
     win = tk.Toplevel(parent)
     win.withdraw()
     win.overrideredirect(True)
@@ -667,9 +668,11 @@ def popup_list(parent, x: int, y: int, entries: list, m: Metrics, on_close=None,
     for entry in entries:
         text, mark, action = entry[:3]
         on_mark = entry[3] if len(entry) > 3 else None
+        shortcut = entry[4] if len(entry) > 4 else None
         b = Button(win, text, lambda a=action: close(a), m, kind="subtle", width="fill", behind=CARD, takefocus=0)
-        b.config(width=max(int(b.cget("width")), m.measure(win, text) + mark_w + 4 * m.f(12)))
-        b.mark, b.mark_font, b.mark_w, b.label = mark, mark_font, mark_w, text
+        key_w = m.measure(win, shortcut) + m.f(32) if shortcut else 0
+        b.config(width=max(int(b.cget("width")), m.measure(win, text) + mark_w + key_w + 4 * m.f(12)))
+        b.mark, b.mark_font, b.mark_w, b.label, b.shortcut = mark, mark_font, mark_w, text, shortcut
         b.draw = (lambda b=b: _menu_row_draw(b))
         if on_mark:
             zone = m.f(12) + mark_w + m.f(5)               # the mark's own column
@@ -708,7 +711,10 @@ def popup_list(parent, x: int, y: int, entries: list, m: Metrics, on_close=None,
             close()
     win.bind("<ButtonPress-1>", outside, add="+")
     win.update_idletasks()
-    win.geometry(f"{max(win.winfo_reqwidth(), m.f(240))}x{win.winfo_reqheight()}+{x}+{y}")
+    w, h = max(win.winfo_reqwidth(), m.f(240)), win.winfo_reqheight()
+    mx, my, mw, mh = monitor_under_cursor()               # opened near the right or bottom edge: stay on screen
+    x, y = max(mx, min(x, mx + mw - w)), max(my, min(y, my + mh - h))
+    win.geometry(f"{w}x{h}+{x}+{y}")
     win.deiconify()
     win.attributes("-topmost", True)
     round_corners(win)
@@ -735,6 +741,8 @@ def _menu_row_draw(b: "Button"):
             b.create_text(x, h / 2, text=glyph, font=b.mark_font, fill=colour, anchor="w")
         x += b.mark_w + b.m.f(10)
     b.create_text(x, h / 2, text=b.label, font=b.m.body, fill=FG, anchor="w")
+    if b.shortcut:
+        b.create_text(w - b.m.f(12), h / 2, text=b.shortcut, font=b.m.body, fill=DIM, anchor="e")
 
 
 def settings_window(parent, config_path: str, apply, on_close, topmost: bool = False) -> tk.Toplevel:

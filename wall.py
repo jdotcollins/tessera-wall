@@ -52,6 +52,7 @@ HELP_SECTIONS = [
         ("Wheel", "Seek; with Shift, seek every video"),
         ("Ctrl+wheel", "Magnify the video at the pointer (Z: normal size)"),
         ("Drag a magnified video", "Look around it"),
+        ("Right-click", "Menu for the video: pause, pin, sound, next, snapshot, close…"),
         ("Middle-click", "Close the video"),
         ("Top edge of screen", "Menu: add videos, controls, settings, close"),
     ]),
@@ -155,6 +156,9 @@ class Tile:
     preparing: bool = False
     fade: object = None          # None, "hold" (black while the next video loads) or the fade-in start time
     pan: tuple = (0.0, 0.0)      # mpv video-pan-x / -y while magnified
+    note: object = None          # tk.Frame over the tile: "Loading…" (a link on its way) or why it failed
+    failed: bool = False         # could not play: its player is gone and the note says why (see fail_in_place)
+    gone_at: float | None = None  # a failed tile gives up its place then (None while a retry is on its way)
 
 
 def fmt_time(s: float) -> str:
@@ -222,6 +226,8 @@ class Wall:
         self.bar_keys = False             # the menu bar was opened with F10: it has the keys until Esc or a pick
         self.bar_building = False
         self.failed_why: dict[str, str] = {}  # sources (in failed) that could not be listed: why
+        self.failed_shown: set[str] = set()   # failures their own tile showed (fail_in_place): not announced
+        self.retry_tile: dict[str, Tile] = {}  # a link being tried again -> the tile keeping its place
         # Links that fail to open are retried (see open_failed): which yt-dlp each was tried with, the one
         # to use next, links that already had their update check, and retries still being prepared.
         self.link_tried: dict[str, list[str]] = {}
@@ -320,6 +326,8 @@ class Wall:
         proc, pipe = started
         self.tiles.append(Tile(path, frame, proc, pipe, time.monotonic(), opened_at=start or 0.0,
                                pool=self.pool_of.get(path), aspect=9 / 16 if sources.is_short(path) else 16 / 9))
+        if "://" in path:                            # a link takes seconds to look up: say so in its place
+            self.show_loading(self.tiles[-1])
         self.clear_status()
         self.schedule_switch(self.tiles[-1])
         self.need_layout = True
@@ -414,9 +422,93 @@ class Wall:
         if self.audio_lock is tile:
             self.audio_lock = None
             log.info("audio lock off (its video closed)")
+        if self.retry_tile.get(tile.path) is tile:
+            del self.retry_tile[tile.path]
         if self.bar_tile is tile:
             self.bar_tile = None
         self.need_layout = True
+
+    # ---- a tile's own note: loading, or why it could not play ------------------------------------------
+    FAILED_SHOW_S = 5.0          # a failed tile keeps its place this long, saying why, before the wall closes up
+
+    def tile_name(self, t: Tile) -> str:
+        name = self.title_of.get(t.path) if "://" in t.path else os.path.basename(t.path)
+        if not name and "://" in t.path:
+            from urllib.parse import urlparse
+            name = urlparse(t.path).netloc.removeprefix("www.") or t.path
+        name = name or t.path
+        return name if len(name) <= 70 else name[:67] + "…"
+
+    def set_note(self, t: Tile, lines: list[tuple[str, str]]):
+        """Text in the middle of t's frame, for while it has no picture: [(text, colour), ...]. The player's
+        own window covers it once it shows video; a failed tile's player is gone, so it shows there."""
+        self.clear_note(t)
+        size = max(12, self.H // 72)
+        width = max(120, int((t.frame.winfo_width() if t.frame.winfo_width() > 1 else
+                              (t.target.w if t.target else 400)) * 0.85))
+        box = tk.Frame(t.frame, bg="black")
+        for text, colour in lines:
+            tk.Label(box, text=text, bg="black", fg=colour, font=("Segoe UI", -size), wraplength=width,
+                     justify="center").pack()
+        box.place(relx=0.5, rely=0.5, anchor="center")
+        t.note = box
+
+    def clear_note(self, t: Tile):
+        if t.note is not None:
+            try:
+                t.note.destroy()
+            except tk.TclError:
+                pass
+            t.note = None
+
+    def show_loading(self, t: Tile):
+        """A link on its way: its name (or site) and "Loading…", until the picture arrives. Information, so
+        not in clean mode or with messages off."""
+        if self.clean or not C.SHOW_MESSAGES:
+            self.clear_note(t)
+            return
+        self.set_note(t, [(self.tile_name(t), FG), ("Loading…", DIM)])
+        log.info("loading note: %s", t.path)
+
+    def fail_in_place(self, t: Tile, why: str):
+        """t could not play. Its place is kept and says so, instead of the wall closing up at once around a
+        tile that just vanished: the player is stopped, the note names the video and the likely cause, and
+        FAILED_SHOW_S later the tile goes. A link is first tried again in the same place (open_failed)."""
+        log.info("tile failed (%s): %s", why, t.path)
+        if t.ipc:
+            t.ipc.close()
+        t.ipc = None
+        if t.proc.poll() is None:
+            t.proc.kill()
+        t.failed, t.gain = True, 0.0
+        if self.open_failed(t.path, tile=t):
+            t.gone_at = None
+            self.set_note(t, [(self.tile_name(t), FG), ("Didn't open. Trying again…", DIM)])
+        else:
+            self.say_failed(t)
+
+    def say_failed(self, t: Tile):
+        link = "://" in t.path
+        self.set_note(t, [(f"Couldn't play {self.tile_name(t)}", FG),
+                          ("It may be offline, private or not a video." if link else
+                           "The file may be damaged or not a video.", DIM)])
+        t.gone_at = time.monotonic() + self.FAILED_SHOW_S
+        self.failed_shown.add(t.path)
+        log.info("could not play: %s (shown in its place)", t.path)
+
+    def respawn(self, t: Tile) -> bool:
+        """A failed link's retry, in the place it already has (see take_link_retries)."""
+        started = self.spawn(t.frame, t.path, t.opened_at)
+        if not started:
+            return False
+        t.proc, t.pipe = started
+        t.ipc, t.born, t.failed, t.gone_at = None, time.monotonic(), False, None
+        t.aspect_known, t.idle_since, t.swapped, t.swap_seq = False, None, False, 0
+        t.panscan = t.dim = t.skip = t.osd = None
+        self.show_loading(t)
+        self.need_layout = True
+        log.info("tile retried in place pipe=%s: %s", t.pipe, t.path)
+        return True
 
     # ---- layout ------------------------------------------------------------
     def relayout(self, rearrange: bool = False):
@@ -1201,23 +1293,27 @@ class Wall:
                 for i, b in enumerate(pop.rows)))
 
     # ---- files that would not play --------------------------------------------
-    def open_failed(self, path: str):
+    def open_failed(self, path: str, tile: Tile | None = None) -> bool:
         """mpv could not open `path`. A file is reported. A link is tried again first, because video sites
         change and yt-dlp may need updating: once after an update check (ytdlp.recover, in a worker thread),
-        then with any copy of yt-dlp it has not been tried with; only then is it reported."""
+        then with any copy of yt-dlp it has not been tried with; only then is it reported. Returns True when
+        a retry is on its way; it opens in `tile` (which keeps its place meanwhile), else in a new one."""
         if "://" not in path:
             self.failed.append(path)
-            return
+            return False
         tried = list(self.link_tried.get(path, []))
         check = path not in self.link_checked
         if not check and not any(c not in tried for c in ytdlp.candidates()):
             self.failed.append(path)
-            return
+            return False
         self.link_checked.add(path)
         self.retrying += 1
-        target = self.message_tile(avoid=path)
-        if target and check:
-            target.ipc.post("show-text", "A link didn't open. Trying again…", 4000, 0)
+        if tile is not None:
+            self.retry_tile[path] = tile                 # the tile says "Trying again" itself
+        else:
+            target = self.message_tile(avoid=path)
+            if target and check:
+                target.ipc.post("show-text", "A link didn't open. Trying again…", 4000, 0)
 
         def work():
             exe = None
@@ -1231,6 +1327,7 @@ class Wall:
                 log.warning("link retry: %s", e)
             self.link_retries.put((path, exe))
         threading.Thread(target=work, daemon=True, name="link retry").start()
+        return True
 
     # ---- link sources: channels, Shorts tabs and playlists (sources.py) -------------------------------
     def waiting(self) -> bool:
@@ -1399,17 +1496,35 @@ class Wall:
             except queue.Empty:
                 return
             self.retrying -= 1
+            t = self.retry_tile.pop(path, None)
+            t = t if t in self.tiles and t.failed else None
             if exe:
                 log.info("link: trying again with %s: %s", exe, path)
                 self.link_next[path] = exe
-                self.add(path)
+                if t is None or not self.respawn(t):
+                    if t is not None:
+                        self.remove(t, "retry could not start")
+                    self.add(path)
             else:
                 self.failed.append(path)
+                if t is not None:
+                    self.say_failed(t)
 
     def report_failed(self):
         """Tell the user, in plain words, about files mpv could not open."""
         if not self.failed or (self.waiting() and not self.tiles):
             return
+        if self.tiles:
+            # Failures their own tile showed (fail_in_place) are not announced again. While only failed
+            # tiles are left, wait: once they have gone, the wall says it all and closes (below).
+            if all(t.failed for t in self.tiles):
+                return
+            shown = [p for p in self.failed if p in self.failed_shown]
+            if shown:
+                self.failed = [p for p in self.failed if p not in self.failed_shown]
+                self.failed_shown.difference_update(shown)
+                if not self.failed:
+                    return
         links = all("://" in p for p in self.failed)
         names = [p if "://" in p else (os.path.basename(p) or p) for p in self.failed]
         names = [n if len(n) <= 60 else n[:57] + "…" for n in names]
@@ -1538,6 +1653,9 @@ class Wall:
         log.info("clean mode %s", "on" if on else "off")
         self.relayout()                                  # dimming, message level, outline
         self.bar_next = 0.0
+        for x in self.tiles:                             # links still loading: their "Loading…" goes or comes back
+            if not x.failed and not x.aspect_known and "://" in x.path:
+                self.show_loading(x)
         t = self.focus if self.focus and self.focus.ipc else next((x for x in self.tiles if x.ipc), None)
         if announce and t:
             t.ipc.post("show-text", "Clean mode. Press I to show the controls again" if on else "Controls shown",
@@ -1561,6 +1679,8 @@ class Wall:
             return
         items = []
         for t in self.tiles:
+            if t.failed:                       # it could not play: not worth reopening next time
+                continue
             pos = t.ipc.value("time-pos") if t.ipc else None
             items.append({"path": t.path, "pos": round(pos or 0, 1)} | ({"pool": t.pool} if t.pool else {}))
         if not items:
@@ -1579,10 +1699,17 @@ class Wall:
             return
         now = time.monotonic()
         for t in list(self.tiles):
+            if t.failed:                       # showing why it could not play (fail_in_place)
+                if t.gone_at is not None and now >= t.gone_at:
+                    self.remove(t, "could not play")
+                continue
+            if t.note is not None and t.aspect_known and t.ipc and t.ipc.value("time-pos") is not None:
+                self.clear_note(t)             # "Loading…" on a link whose size never came: it plays now
             if t.proc.poll() is not None:
                 code = t.proc.returncode
                 if code != 0 and not t.aspect_known:   # never showed a picture
-                    self.open_failed(t.path)
+                    self.fail_in_place(t, f"mpv exited with {code}")
+                    continue
                 elif code != 0 and self.restart(t, code):
                     continue
                 self.remove(t, f"mpv exited with {code}")
@@ -1609,10 +1736,9 @@ class Wall:
                             t.ipc.post("show-text", HINT_TEXT, 5000)
                 except OSError:
                     if now - t.born > CONNECT_TIMEOUT:
-                        self.remove(t, "no IPC connection")
+                        self.fail_in_place(t, "no IPC connection")
             elif "://" in t.path and t.aspect_known and self.link_stalled(t, now):
-                self.open_failed(t.path)
-                self.remove(t, "the link ended without playing")
+                self.fail_in_place(t, "the link ended without playing")
             elif t.aspect_known and self.mode_of(t) in MOVES_ON and t.ipc.value("eof-reached") \
                     and t.ipc.value_seq("eof-reached") > t.swap_seq:
                 self.advance(t)          # it ended (keep-open paused it on its last frame): next / random file
@@ -1626,8 +1752,7 @@ class Wall:
                     if t.idle_since is None:
                         t.idle_since = now
                     elif now - t.idle_since > 0.6:
-                        self.open_failed(t.path)
-                        self.remove(t, "mpv could not open the file")
+                        self.fail_in_place(t, "mpv could not open the file")
                     continue
                 t.idle_since = None
                 if t.swapped:
@@ -1647,6 +1772,7 @@ class Wall:
                     self.need_layout = True
                     if t.fade == "hold":
                         t.fade = now
+                    self.clear_note(t)
                     log.info("aspect known %.4f (%sx%s rot=%s): %s", t.aspect, w, h, rot, t.path)
                 elif now - t.born > ASPECT_TIMEOUT:
                     t.aspect_known = True
@@ -1872,7 +1998,7 @@ class Wall:
     def save_wall_as(self):
         """Ctrl+S / menu: save the open videos and positions under a name, for the start window."""
         items = [{"path": t.path, "pos": round((t.ipc.value("time-pos") if t.ipc else 0) or 0, 1)}
-                 | ({"pool": t.pool} if t.pool else {}) for t in self.tiles]
+                 | ({"pool": t.pool} if t.pool else {}) for t in self.tiles if not t.failed]
         if not items:
             return
         self.dialog_open = True
@@ -1978,6 +2104,78 @@ class Wall:
                 t.ipc.post("seek", 0, "absolute")
         self.bar_next = 0.0
 
+    def close_focused(self):
+        """X, Delete, middle-click: close the focused video (a failed one, whose player is gone, too)."""
+        t = self.focus
+        if t and t.failed:
+            self.remove(t, "closed")
+            return
+        self.cmd("quit")
+
+    def lock_audio(self, t: Tile | None):
+        """The tile menu's sound item: keep the sound on t (None: let it follow the pointer)."""
+        if self.audio_lock is t:
+            return
+        if t is None:
+            self.toggle_audio_lock()
+            return
+        self.audio_lock = t
+        log.info("audio lock -> %s", self.tiles.index(t))
+        if t.ipc:
+            t.ipc.post("show-text", "Sound stays on this video (K to release)", 2000)
+
+    def tile_menu(self, e):
+        """Right-click: what can be done to the video under the pointer, each item with its key, so the
+        menu also teaches the keyboard. The video gets the focus first (a pin moves to it, as Tab does),
+        so every item acts on it as its key would."""
+        t = self.tile_under_cursor((e.x_root, e.y_root))
+        if t is None or self.closing:
+            return
+        if self.pin and self.pin is not t:
+            self.set_pin(t, zoom=self.zoom)
+        elif self.focus is not t:
+            self.set_focus(t, (e.x_root, e.y_root))
+        entries = []
+
+        def item(text, key, action):
+            def run():
+                if t in self.tiles:
+                    if self.focus is not t:
+                        self.set_focus(t)
+                    action()
+            entries.append((text, "", run, None, key))
+        if t.failed:
+            item("Close", "X", lambda: self.remove(t, "closed from its menu"))
+        else:
+            paused = bool(t.ipc and t.ipc.value("pause"))
+            zoomed = self.zoom and self.pin is t
+            item("Play" if paused else "Pause", "Space", lambda: self.cmd("cycle", "pause"))
+            item("Unpin" if self.pin is t else "Pin", "Click", lambda: self.set_pin(None if self.pin is t else t))
+            item("Zoom back" if zoomed else "Zoom", "Double-click",
+                 lambda: self.set_pin(None) if zoomed else self.set_pin(t, zoom=True))
+            item("Let the sound follow the pointer" if self.audio_lock is t else "Keep the sound on this video",
+                 "K", lambda: self.lock_audio(None if self.audio_lock is t else t))
+            if t.mag:
+                item("Normal size", "Z", lambda: self.unmagnify(t))
+            if not ("://" in t.path and not t.pool):
+                item("Next video", "Page Down", lambda: self.step_file(1))
+                item("Random video", "N", self.swap_random)
+            item("Next audio track", "A", lambda: self.cycle_track("audio"))
+            item("Next subtitles", "T", lambda: self.cycle_track("sub"))
+            item("Snapshot", "P", self.snapshot)
+            item("Close", "X", self.close_focused)
+
+        def closed():
+            self.dialog_open = False
+            self.root.focus_set()
+        self.pressing, self.press_tile, self.dragging = False, None, False
+        self.dialog_open = True                          # the list has the keys while it is open
+        m = metrics_for(self.root)
+        pop = popup_list(self.root, e.x_root, e.y_root, entries, m, on_close=closed)
+        log.info("tile menu for %d: %s", self.tiles.index(t), " ".join(
+            f"{re.sub(r'[^a-z]+', '-', x[0].lower()).strip('-')}={b.winfo_rootx()},{b.winfo_rooty()},{b.winfo_width()},{b.winfo_height()}"
+            for x, b in zip(entries, pop.rows)))
+
     def reset(self):
         self.pin, self.zoom, self.audio_lock = None, False, None
         self.set_focus(None)
@@ -2072,7 +2270,8 @@ class Wall:
         b("<Prior>", lambda e: self.step_file(-1))   # Page Up
         b("<ButtonRelease-1>", self.on_release)
         for seq in ("<x>", "<Delete>", "<Button-2>"):
-            b(seq, lambda e: self.cmd("quit"))
+            b(seq, lambda e: self.close_focused())
+        b("<Button-3>", self.tile_menu)
         b("<Key-0>", lambda e: self.reset())
         b("<ButtonPress-1>", self.on_press)
         b("<B1-Motion>", self.on_drag)

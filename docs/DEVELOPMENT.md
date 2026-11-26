@@ -329,6 +329,18 @@ folder on the development PC still has the old name; nothing depends on it.
   - Launch hint: shown on the first `HINT_WALLS` walls, counted in `state.json` beside the settings file
     (`files.read_state` / `write_state`); opening the controls list (H) retires it. `hint_shown` is set at
     the launch moment even when no hint is shown, because the update notice waits for it.
+  - A tile that cannot play keeps its place (`fail_in_place`): its player is killed, `t.failed` is set and
+    a note (`set_note`, a tk frame inside the tile's frame, visible once mpv's window is gone) names the
+    video and the likely cause; `tick` removes it `FAILED_SHOW_S` later. Its failure is in `failed_shown`,
+    so `report_failed` does not announce it again; with only failed tiles left it waits, and once they
+    have gone the "nothing playable" path runs as before. A link is retried in the same tile
+    (`retry_tile`, `respawn`) instead of a new one at the end. Failed tiles are left out of sessions and
+    saved walls; X / middle-click / the menu close them.
+  - Links show "Loading…" (`show_loading`) in the tile's frame until their size is known: mpv's window
+    (`--force-window=yes`) only appears once the link has been looked up, so the note is visible meanwhile.
+    Not in clean mode or with messages off.
+  - Right-click (`tile_menu`): `ui.popup_list` rows with their keys (5th entry item), kept on the monitor.
+    The video gets the focus first (a pin moves to it), so each item runs the same code as its key.
   - Animations (`animations` setting, `ui.motion()`): `system` (default) follows Windows' "Animation
     effects" (`winapi.animations_enabled`, re-read every 5 s), `on` / `off` override it. Off: the re-tile
     animation and window fades snap.

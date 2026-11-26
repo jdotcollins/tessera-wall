@@ -171,6 +171,7 @@ of the whole PC slowing to a crawl.
 | Hover | Focus a video: audio fades to it, it enlarges, the others dim |
 | Click | Pin the video so hover cannot change focus (click again to release) |
 | Double-click | Zoom the video to most of the screen (again to undo) |
+| Right-click | Menu for that video (pause, pin, zoom, keep its sound, next or random video, tracks, snapshot, close), each item with its key |
 | `Ctrl`+wheel | Magnify the video under the pointer, up to 8x, around the spot you point at |
 | Drag a magnified video | Look around it |
 | Drag onto another video | Swap their positions |
