@@ -1,0 +1,202 @@
+# Builds the Windows installer on GitHub's runners, signs it through SignPath when that is set up, and
+# makes a DRAFT release for a version tag. Publishing the draft (after writing its notes) stays a person's
+# decision; winget.yml then sends the new version to winget.
+#
+#   Release:   bump VERSION, commit, push a tag v<VERSION>  ->  draft release with installer + mpv archive
+#   Try it:    Actions > Release > Run workflow  ->  builds and keeps the installer as a run artifact only
+#
+# Signing (SignPath Foundation; see docs/DEVELOPMENT.md, "Release builds and signing") runs only when the
+# repository variable SIGNPATH_ORGANIZATION_ID is set. It signs in two passes: the app's own files before
+# Inno Setup packs them, then the installer. Until then the jobs are skipped and the build is unsigned.
+#   Variables: SIGNPATH_ORGANIZATION_ID, SIGNPATH_PROJECT_SLUG, SIGNPATH_POLICY_SLUG
+#   Secret:    SIGNPATH_API_TOKEN
+name: Release
+
+on:
+  push:
+    tags: ["v*"]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: release-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  app:
+    name: App folder
+    runs-on: windows-latest
+    outputs:
+      version: ${{ steps.version.outputs.version }}
+      artifact-id: ${{ steps.upload.outputs.artifact-id }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.13"
+      - name: Version
+        id: version
+        shell: pwsh
+        run: |
+          $v = (Get-Content VERSION -Raw).Trim()
+          if ($env:GITHUB_REF_TYPE -eq 'tag' -and $env:GITHUB_REF_NAME -ne "v$v") {
+            throw "Tag $env:GITHUB_REF_NAME does not match VERSION $v"
+          }
+          "version=$v" >> $env:GITHUB_OUTPUT
+          "Tessera Wall $v"
+      - name: Unit tests
+        shell: pwsh
+        run: |
+          foreach ($t in Get-ChildItem test_*.py) {
+            python $t.Name
+            if ($LASTEXITCODE -ne 0) { throw "$($t.Name) failed" }
+          }
+      - name: Build tools (pinned by hash)
+        run: python -m pip install --require-hashes -r requirements-build.txt
+      - name: Downloads cache (mpv, yt-dlp, Deno; build.ps1 checks each SHA-256)
+        uses: actions/cache@v4
+        with:
+          path: downloads
+          key: downloads-${{ hashFiles('build.ps1') }}
+      - name: Build the app folder
+        run: powershell -ExecutionPolicy Bypass -File build.ps1 -SkipInstaller
+      - name: Keep the app folder
+        id: upload
+        uses: actions/upload-artifact@v4
+        with:
+          name: app-unsigned
+          path: build/dist/TesseraWall/
+          if-no-files-found: error
+      - name: Keep the mpv archive (attached to releases for the GPL notice)
+        uses: actions/upload-artifact@v4
+        with:
+          name: mpv-archive
+          path: downloads/mpv-*.7z
+          if-no-files-found: error
+          compression-level: 0
+
+  sign-app:
+    name: Sign the app's files
+    needs: app
+    if: vars.SIGNPATH_ORGANIZATION_ID != ''
+    runs-on: ubuntu-latest
+    steps:
+      - uses: signpath/github-action-submit-signing-request@v1
+        with:
+          api-token: ${{ secrets.SIGNPATH_API_TOKEN }}
+          organization-id: ${{ vars.SIGNPATH_ORGANIZATION_ID }}
+          project-slug: ${{ vars.SIGNPATH_PROJECT_SLUG }}
+          signing-policy-slug: ${{ vars.SIGNPATH_POLICY_SLUG }}
+          artifact-configuration-slug: app
+          github-artifact-id: ${{ needs.app.outputs.artifact-id }}
+          wait-for-completion: true
+          wait-for-completion-timeout-in-seconds: 3600   # a person approves each request in SignPath
+          output-artifact-directory: signed
+      - uses: actions/upload-artifact@v4
+        with:
+          name: app-signed
+          path: signed/
+          if-no-files-found: error
+
+  installer:
+    name: Installer
+    needs: [app, sign-app]
+    if: ${{ !cancelled() && needs.app.result == 'success' && (needs.sign-app.result == 'success' || needs.sign-app.result == 'skipped') }}
+    runs-on: windows-latest
+    outputs:
+      artifact-id: ${{ steps.upload.outputs.artifact-id }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+      - name: The app folder (signed if signing ran)
+        uses: actions/download-artifact@v4
+        with:
+          name: ${{ needs.sign-app.result == 'success' && 'app-signed' || 'app-unsigned' }}
+          path: build/dist/TesseraWall
+      - name: Inno Setup
+        shell: pwsh
+        run: |
+          $iscc = @("${env:ProgramFiles(x86)}\Inno Setup 6\ISCC.exe", "$env:ProgramFiles\Inno Setup 6\ISCC.exe") |
+                  Where-Object { Test-Path $_ } | Select-Object -First 1
+          if (-not $iscc) { choco install innosetup --no-progress -y; if ($LASTEXITCODE -ne 0) { throw "Inno Setup install failed" } }
+      - name: Build the installer
+        run: powershell -ExecutionPolicy Bypass -File build.ps1 -InstallerOnly
+      - name: Keep the installer
+        id: upload
+        uses: actions/upload-artifact@v4
+        with:
+          name: installer-unsigned
+          path: build/installer/TesseraWall-setup-${{ needs.app.outputs.version }}.exe
+          if-no-files-found: error
+          compression-level: 0
+
+  sign-installer:
+    name: Sign the installer
+    needs: installer
+    if: ${{ !cancelled() && needs.installer.result == 'success' && vars.SIGNPATH_ORGANIZATION_ID != '' }}
+    runs-on: ubuntu-latest
+    steps:
+      - uses: signpath/github-action-submit-signing-request@v1
+        with:
+          api-token: ${{ secrets.SIGNPATH_API_TOKEN }}
+          organization-id: ${{ vars.SIGNPATH_ORGANIZATION_ID }}
+          project-slug: ${{ vars.SIGNPATH_PROJECT_SLUG }}
+          signing-policy-slug: ${{ vars.SIGNPATH_POLICY_SLUG }}
+          artifact-configuration-slug: installer
+          github-artifact-id: ${{ needs.installer.outputs.artifact-id }}
+          wait-for-completion: true
+          wait-for-completion-timeout-in-seconds: 3600
+          output-artifact-directory: signed
+      - uses: actions/upload-artifact@v4
+        with:
+          name: installer-signed
+          path: signed/
+          if-no-files-found: error
+          compression-level: 0
+
+  draft-release:
+    name: Draft release
+    needs: [app, installer, sign-installer]
+    if: ${{ !cancelled() && startsWith(github.ref, 'refs/tags/v') && needs.installer.result == 'success' && (needs.sign-installer.result == 'success' || needs.sign-installer.result == 'skipped') }}
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          name: ${{ needs.sign-installer.result == 'success' && 'installer-signed' || 'installer-unsigned' }}
+          path: out
+      - uses: actions/download-artifact@v4
+        with:
+          name: mpv-archive
+          path: out
+      - name: Create the draft
+        env:
+          GH_TOKEN: ${{ github.token }}
+          VERSION: ${{ needs.app.outputs.version }}
+          SIGNED: ${{ needs.sign-installer.result == 'success' }}
+        run: |
+          set -euo pipefail
+          cd out
+          ls -l
+          test -f "TesseraWall-setup-$VERSION.exe"
+          {
+            echo "_Write the release notes here (see the previous release for the layout), then publish._"
+            echo
+            if [ "$SIGNED" = "true" ]; then echo "Signed through SignPath Foundation."; else echo "**Unsigned build.**"; fi
+            echo
+            echo "## Files"
+            echo
+            echo "| File | SHA-256 |"
+            echo "|---|---|"
+            for f in *; do echo "| \`$f\` | \`$(sha256sum "$f" | cut -d' ' -f1)\` |"; done
+            echo
+            echo "Built by GitHub Actions run ${GITHUB_SERVER_URL}/${GITHUB_REPOSITORY}/actions/runs/${GITHUB_RUN_ID} from commit ${GITHUB_SHA}."
+          } > ../notes.md
+          gh release create "$GITHUB_REF_NAME" --repo "$GITHUB_REPOSITORY" --draft --verify-tag \
+            --title "Tessera Wall $VERSION" --notes-file ../notes.md ./*

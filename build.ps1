@@ -1,10 +1,12 @@
 <#
 Builds the standalone Tessera Wall app and its Windows installer.
 
-  powershell -ExecutionPolicy Bypass -File build.ps1 [-SkipInstaller] [-MpvDir C:\path\to\mpv]
+  powershell -ExecutionPolicy Bypass -File build.ps1 [-SkipInstaller | -InstallerOnly] [-MpvDir C:\path\to\mpv]
 
-Needs:  pip install pyinstaller tkinterdnd2      (app bundle)
-        python -m pip install --require-hashes -r requirements-build.txt   (truststore; checked below)
+  -InstallerOnly packages an app folder already in build\dist\TesseraWall (steps 1-2 skipped). The release
+  workflow (.github/workflows/release.yml) uses it to package app files after they have been signed.
+
+Needs:  python -m pip install --require-hashes -r requirements-build.txt   (PyInstaller, tkinterdnd2, truststore)
         Inno Setup 6, with ISCC.exe on PATH or in its default folder   (installer)
         Internet access on the first build (to fetch the pinned mpv; cached in downloads\ after that)
 
@@ -18,8 +20,11 @@ Updating the pinned mpv: pick a release at https://github.com/shinchiro/mpv-winb
 (the plain x86_64 build, not -v3, which needs AVX2), copy its tag, file name and the sha256 digest
 shown on the release page into the four $Mpv* values below, then re-run the tests against the build.
 Releases there are pruned after a while, so keep downloads\ (or the archive) for builds you shipped.
+Every Tessera Wall release attaches the archive it shipped; $MpvMirror points at one of them and is used
+when the upstream download fails (same SHA-256 check either way). Point it at the first release that
+ships a newly pinned mpv once that release is out.
 #>
-param([string]$MpvDir = '', [switch]$SkipInstaller)
+param([string]$MpvDir = '', [switch]$SkipInstaller, [switch]$InstallerOnly)
 $ErrorActionPreference = 'Stop'
 Set-Location $PSScriptRoot
 
@@ -28,6 +33,7 @@ $MpvRelease = '20261111'
 $MpvAsset   = 'mpv-x86_64-20261111-git-bcde6b93cc.7z'
 $MpvSha256  = 'f259b5fd4b5c395617c948a4fadcdf55bba1c5282fb7c13e88626b3f71072baf'
 $MpvCommit  = 'bcde6b93cc'
+$MpvMirror  = "https://github.com/jdotcollins/tessera-wall/releases/download/v0.15.0/$MpvAsset"
 
 # yt-dlp, which mpv uses to play web links (YouTube, Twitch...). Public domain (Unlicense). Pinned like
 # mpv and never modified; the app keeps a separate copy updated from yt-dlp's stable channel (ytdlp.py),
@@ -42,9 +48,33 @@ $DenoSha256  = 'cba84b26e0df5ae7f74fc66b86a95b866872a86292ebd84fa1e959927edd93bf
 
 $version = (Get-Content VERSION -Raw).Trim()
 "Building Tessera Wall $version"
+$app = Join-Path $PSScriptRoot 'build\dist\TesseraWall'
+
+# 3. installer (called at the end, or straight away with -InstallerOnly)
+function Build-Installer {
+    $iscc = (Get-Command iscc.exe -ErrorAction SilentlyContinue).Source
+    if (-not $iscc) {
+        # per-user install (e.g. winget --scope user) first, then the machine-wide default
+        $iscc = @("$env:LOCALAPPDATA\Programs\Inno Setup 6\ISCC.exe",
+                  "${env:ProgramFiles(x86)}\Inno Setup 6\ISCC.exe",
+                  "$env:ProgramFiles\Inno Setup 6\ISCC.exe") |
+            Where-Object { Test-Path $_ } | Select-Object -First 1
+    }
+    if (-not $iscc -or -not (Test-Path $iscc)) { throw "Inno Setup 6 not found. Install it, or re-run with -SkipInstaller." }
+    & $iscc "/DAppVersion=$version" installer.iss
+    if ($LASTEXITCODE -ne 0) { throw "Inno Setup failed" }
+    "Installer: $(Join-Path $PSScriptRoot "build\installer\TesseraWall-setup-$version.exe")"
+}
+if ($InstallerOnly) {
+    if (-not (Test-Path (Join-Path $app 'TesseraWall.exe'))) { throw "No app folder at ${app}: run build.ps1 -SkipInstaller first" }
+    $bundled = (Get-Content (Join-Path $app 'VERSION') -Raw).Trim()
+    if ($bundled -ne $version) { throw "The app folder is version $bundled, VERSION says $version" }
+    Build-Installer
+    return
+}
 
 python -m PyInstaller --version | Out-Null
-if ($LASTEXITCODE -ne 0) { throw "PyInstaller is not installed. Run: pip install pyinstaller" }
+if ($LASTEXITCODE -ne 0) { throw "PyInstaller is not installed. Run: python -m pip install --require-hashes -r requirements-build.txt" }
 # Without truststore the packaged app's update check fails on a fresh Windows (updates.tls_context).
 python -c "import truststore" 2>$null
 if ($LASTEXITCODE -ne 0) { throw "truststore is not installed. Run: python -m pip install --require-hashes -r requirements-build.txt" }
@@ -56,7 +86,6 @@ python -m PyInstaller --noconfirm --clean --windowed --name TesseraWall `
     --distpath build\dist --workpath build\work --specpath build `
     tesserawall.pyw
 if ($LASTEXITCODE -ne 0) { throw "PyInstaller failed" }
-$app = Join-Path $PSScriptRoot 'build\dist\TesseraWall'
 
 # 2. bundled mpv
 $pinned = -not $MpvDir
@@ -66,7 +95,12 @@ if ($pinned) {
         New-Item -ItemType Directory -Force (Split-Path $archive) | Out-Null
         $url = "https://github.com/shinchiro/mpv-winbuild-cmake/releases/download/$MpvRelease/$MpvAsset"
         "Downloading $url"
-        Invoke-WebRequest $url -OutFile "$archive.part" -UseBasicParsing
+        try {
+            Invoke-WebRequest $url -OutFile "$archive.part" -UseBasicParsing
+        } catch {
+            "  failed ($($_.Exception.Message)); trying the copy attached to a Tessera Wall release: $MpvMirror"
+            Invoke-WebRequest $MpvMirror -OutFile "$archive.part" -UseBasicParsing
+        }
         Move-Item "$archive.part" $archive -Force
     }
     $hash = (Get-FileHash $archive -Algorithm SHA256).Hash.ToLower()
@@ -183,17 +217,4 @@ Copy-Item README.md (Join-Path $app 'README.md') -Force
 
 "App folder: $app  ($([math]::Round((Get-ChildItem $app -Recurse -File | Measure-Object Length -Sum).Sum / 1MB)) MB)"
 if ($SkipInstaller) { return }
-
-# 3. installer
-$iscc = (Get-Command iscc.exe -ErrorAction SilentlyContinue).Source
-if (-not $iscc) {
-    # per-user install (e.g. winget --scope user) first, then the machine-wide default
-    $iscc = @("$env:LOCALAPPDATA\Programs\Inno Setup 6\ISCC.exe",
-              "${env:ProgramFiles(x86)}\Inno Setup 6\ISCC.exe",
-              "$env:ProgramFiles\Inno Setup 6\ISCC.exe") |
-        Where-Object { Test-Path $_ } | Select-Object -First 1
-}
-if (-not $iscc -or -not (Test-Path $iscc)) { throw "Inno Setup 6 not found. Install it, or re-run with -SkipInstaller." }
-& $iscc "/DAppVersion=$version" installer.iss
-if ($LASTEXITCODE -ne 0) { throw "Inno Setup failed" }
-"Installer: $(Get-ChildItem build\installer\*.exe | Sort-Object LastWriteTime | Select-Object -Last 1 -ExpandProperty FullName)"
+Build-Installer

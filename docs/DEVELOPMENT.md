@@ -171,10 +171,26 @@ folder on the development PC still has the old name; nothing depends on it.
   (`TESSERAWALL_UPDATE_API`) with browser opening replaced by a log line (`TESSERAWALL_NO_BROWSER=1`).
 - Release checklist: run `update-mpv.ps1 -CheckOnly`; check for newer stable yt-dlp and Deno releases
   and, if worth it, re-pin them in `build.ps1` (version and SHA-256; Deno's `licenses\deno-LICENSE.md`
-  from the same tag); run the full test suite; build the installer; run `tests\sandbox\run.ps1` on it;
-  commit and tag `v<VERSION>`; publish the GitHub release with the installer **and** the mpv archive
-  from `downloads\` attached (the build project deletes old releases, and the archive is the shipped
-  build's source pointer for the GPL notice).
+  from the same tag); run the full test suite; build the installer locally and run `tests\sandbox\run.ps1`
+  on it; commit, then push the tag `v<VERSION>`. `.github/workflows/release.yml` builds the release
+  installer on GitHub's runners and makes a **draft** release with the installer and the mpv archive
+  attached (the build project deletes old releases, and the archive is the shipped build's source
+  pointer for the GPL notice) and a SHA-256 table. Write the notes into the draft and publish it;
+  `.github/workflows/winget.yml` then submits the version to winget. Up to 0.15.0 releases were built
+  and uploaded by hand from this PC.
+- Release builds and signing. Build tools are pinned by hash in `requirements-build.txt` (PyInstaller
+  and its dependencies, tkinterdnd2, truststore), so a CI build matches a local one. `build.ps1
+  -SkipInstaller` makes the app folder, `-InstallerOnly` packs an existing one; the workflow runs them
+  as separate jobs so the app's files can be signed before Inno Setup packs them. Signing is through
+  SignPath Foundation (free code signing for open-source projects; the publisher shown by Windows is
+  "SignPath Foundation"). It only signs builds it can trace to a GitHub Actions run on this repository.
+  The sign jobs run only when the repository variable `SIGNPATH_ORGANIZATION_ID` is set (with
+  `SIGNPATH_PROJECT_SLUG`, `SIGNPATH_POLICY_SLUG` and the secret `SIGNPATH_API_TOKEN`); SignPath needs
+  two artifact configurations, `app` (sign `TesseraWall.exe` in the folder) and `installer` (sign the
+  setup exe). Each request is approved by hand in SignPath. Not yet set up: the application to SignPath
+  is pending, so builds are unsigned. Inno's uninstaller (`unins000.exe`) stays unsigned, since signing
+  it needs a signing tool at compile time. `winget.yml` needs the secret `WINGET_TOKEN` (classic token,
+  `public_repo`) and only works once the first manifest (winget-pkgs PR #490665) has been merged.
 - Installer checked 2026-11-12 on the development PC (silent install, upgrade over an existing
   install, shortcuts, Send To targets, right-click on files and folders, uninstall leaves only the
   user's settings). Not yet tried on a clean PC or through the interactive wizard.
