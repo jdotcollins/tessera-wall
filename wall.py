@@ -118,6 +118,7 @@ MOVES_ON = ("next", "random")   # end modes that load another video; "loop" and 
 HINT_TEXT = "Point at a video to hear it     H: controls     Top edge: menu     Esc: exit"
 HINT_WALLS = 5           # the launch hint shows on this many walls, or until H is pressed
 CONNECT_TIMEOUT = 15.0   # seconds for mpv to create its IPC pipe
+LOST_PLAYER_S = 5.0      # a player still running this long after its connection ended is restarted
 ASPECT_TIMEOUT = 10.0    # seconds to wait for a video size before keeping the 16:9 guess
 MAG_STEP = 0.25          # Ctrl+wheel: magnification per notch, as mpv's video-zoom (log2): x1.19
 MAG_MAX = 3.0            # at most 8x
@@ -154,6 +155,8 @@ class Tile:
     pool: str | None = None      # the channel / playlist (sources.py) it was picked from: N etc. pick from it
     ready: dict | None = None    # a source's next video, looked up ahead: {url, how, r (ytdlp.resolve), at}
     preparing: bool = False
+    prepare_id: int = 0          # bumped by each swap and each new lookup: an older lookup is out of date
+    lost_at: float | None = None  # when its IPC connection ended while mpv kept running
     fade: object = None          # None, "hold" (black while the next video loads) or the fade-in start time
     pan: tuple = (0.0, 0.0)      # mpv video-pan-x / -y while magnified
     note: object = None          # tk.Frame over the tile: "Loading…" (a link on its way) or why it failed
@@ -303,6 +306,9 @@ class Wall:
         if source:                                   # a channel or playlist: open some of its videos
             self.open_source(source, C.SOURCE_COUNT)
             return
+        if pool and sources.source_of(pool) != pool:  # sessions and saved walls are files anyone could hand over
+            log.info("ignored a source that is not a channel, playlist or search: %r", pool)
+            pool = None
         if pool:                                     # reopened from a session: keep picking from its source
             self.pool_of[path] = pool
             if pool not in self.pools and pool not in self.listing:
@@ -399,6 +405,7 @@ class Wall:
             return False
         t.proc, t.pipe = started
         t.ipc, t.born, t.restarts, t.opened_at = None, now, t.restarts + [now], pos
+        t.swap_seq, t.lost_at = 0, None                # the new connection counts its messages from 0
         t.panscan = t.dim = t.skip = t.osd = None      # resend to the new player
         t.gain = 0.0                                   # starts muted; the crossfade brings sound back
         self.need_layout = True
@@ -1018,6 +1025,7 @@ class Wall:
         else:
             t.ipc.post("loadfile", new, "replace", "-1", f"start={start},ab-loop-a=no,ab-loop-b=no")
         t.ready, t.preparing = None, False
+        t.prepare_id += 1                                # a lookup still queued for the old video is skipped
         if "://" in new:   # black until the new picture arrives, instead of the old video's last frame
             t.ipc.set_async("brightness", -100)
             t.dim, t.fade = -100, "hold"
@@ -1404,26 +1412,30 @@ class Wall:
             if not url:
                 continue
             t.preparing = True
+            t.prepare_id += 1
             coming = len(self.tiles) + self.pending_links + self.incoming.qsize() + sum(self.listing.values())
             height = sources.height_for(coming, self.H, C.STREAM_MAX_HEIGHT)
 
-            def work(t=t, url=url, how=how, height=height):
+            def work(t=t, url=url, how=how, height=height, ticket=t.prepare_id):
                 with self.prepare_slots:
+                    if t.prepare_id != ticket or self.closing:   # swapped while waiting: nobody wants it
+                        log.info("prepare skipped (out of date): %s", url)
+                        return
                     try:
                         r = ytdlp.resolve(url, height)
                     except Exception as e:
                         log.info("could not prepare %s: %s", url, e)
                         r = None
-                self.prepared.put((t, url, how, r))
+                self.prepared.put((t, url, how, r, ticket))
             threading.Thread(target=work, daemon=True, name="prepare next").start()
 
     def take_prepared(self):
         while True:
             try:
-                t, url, how, r = self.prepared.get_nowait()
+                t, url, how, r, ticket = self.prepared.get_nowait()
             except queue.Empty:
                 return
-            if t in self.tiles and t.preparing:
+            if t in self.tiles and t.preparing and t.prepare_id == ticket:
                 t.preparing = False
                 t.ready = {"url": url, "how": how, "r": r, "at": time.monotonic()}
                 log.info("next ready%s: %s", "" if r else " (page link only)", url)
@@ -1737,6 +1749,16 @@ class Wall:
                 except OSError:
                     if now - t.born > CONNECT_TIMEOUT:
                         self.fail_in_place(t, "no IPC connection")
+            elif not t.ipc.alive:
+                # The connection ended but mpv runs on. Usually it is quitting and its exit is a moment
+                # away; if not, the player can no longer be told anything (sound, dimming, seeking), so it
+                # is ended and comes back in place through the crash restart above.
+                if t.lost_at is None:
+                    t.lost_at = now
+                elif now - t.lost_at > LOST_PLAYER_S:
+                    log.warning("lost the connection to a running player; restarting it: %s", t.path)
+                    t.lost_at = None
+                    t.proc.kill()
             elif "://" in t.path and t.aspect_known and self.link_stalled(t, now):
                 self.fail_in_place(t, "the link ended without playing")
             elif t.aspect_known and self.mode_of(t) in MOVES_ON and t.ipc.value("eof-reached") \
@@ -2009,11 +2031,17 @@ class Wall:
             self.root.focus_set()
         if not name or not name.strip():
             return
-        path = save_wall(self.config_path, name, items)
-        log.info("wall saved: %s (%d videos)", path, len(items))
-        target = self.focus or self.tiles[0]
-        if target.ipc:
-            target.ipc.post("show-text", f"Saved \u201c{name.strip()}\u201d", 2500)
+        try:
+            path = save_wall(self.config_path, name, items)
+        except OSError as e:                          # a full disk or a locked folder must not close the wall
+            log.warning("wall not saved: %s", e)
+            text = f"Couldn't save \u201c{name.strip()}\u201d: {e.strerror or e}"
+        else:
+            log.info("wall saved: %s (%d videos)", path, len(items))
+            text = f"Saved \u201c{name.strip()}\u201d"
+        target = self.message_tile()                  # the dialog was modal, but the wall may have changed
+        if target:
+            target.ipc.post("show-text", text[:120], 4000 if text.startswith("Couldn't") else 2500)
 
     def change_speed(self, factor):
         """[ and ]: slower / faster by 10 %; Backspace (factor None): normal speed. mpv shows the result."""
@@ -2283,12 +2311,13 @@ class Wall:
         self.closing = True
         log.info("quit")
         self.save_session()
-        for t in self.tiles:
-            if t.ipc:
-                t.ipc.command("quit", timeout=0.3)
+        for t in self.tiles:                 # ask all at once, then wait on one shared deadline: a few frozen
+            if t.ipc:                        # players must not hold the full-screen window up for seconds each
+                t.ipc.post("quit")
+        deadline = time.monotonic() + 1.5
         for t in self.tiles:
             try:
-                t.proc.wait(1)
+                t.proc.wait(max(0.0, deadline - time.monotonic()))
             except subprocess.TimeoutExpired:
                 t.proc.kill()
         self.root.destroy()

@@ -11,6 +11,7 @@ from __future__ import annotations
 import json
 import logging
 import os
+import shutil
 import subprocess
 import tempfile
 import time
@@ -182,6 +183,7 @@ def probe(paths: list[str], cache_path: str, progress=None, mpv: str | None = No
             if progress:
                 progress(len(paths) - len(todo) + sum(done_lines.values()), total)
         save_cache(cache_path, cache)
+        shutil.rmtree(work, ignore_errors=True)          # the playlists and outputs are read; nothing to keep
     for p in paths:
         result.setdefault(p, None)
     log.info("shape probe: %d files, %d read, %d cached, %d not videos, %.2fs", total, len(todo),

@@ -36,3 +36,7 @@ jobs:
         run: python test_sources.py
       - name: Players end with the app
         run: python test_jobs.py
+      - name: Files, folders and state
+        run: python test_files.py
+      - name: Memory guard
+        run: python test_resources.py

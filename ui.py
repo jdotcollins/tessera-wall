@@ -1350,12 +1350,23 @@ def start_window(last_session: list, incoming: queue.Queue, checker: "updates.Ch
                 b.set_enabled(False)
 
         def work():
-            read = lambda files: probe.probe(files, probe.cache_path_for(config_path))
-            _, per = T.gather([t], [], expand, read)
-            state["plan"] = T.plan(t, {}, folder_shapes=per[t.name])
+            try:
+                read = lambda files: probe.probe(files, probe.cache_path_for(config_path))
+                _, per = T.gather([t], [], expand, read)
+                state["plan"] = T.plan(t, {}, folder_shapes=per[t.name])
+            except Exception as e:                         # say so, instead of a window stuck on "Reading…"
+                log.exception("start window template %s failed", t.name)
+                state["error"] = f"Couldn't read the videos for “{t.name}”: {e}"
 
         def wait():
             plan = state.get("plan")
+            if plan is None and "error" in state:
+                status.config(text=state["error"][:90])
+                busy[0] = False
+                for b in buttons.values():
+                    if isinstance(b, Button):
+                        b.set_enabled(True)
+                return
             if plan is None:
                 jobs.append(root.after(100, wait))
                 return
@@ -1678,11 +1689,19 @@ def template_window(folders: list, config_path: str | None, parent=None) -> "tem
         # One read for the chosen folder and every folder a template's slots name.
         read = lambda files: probe.probe(files, probe.cache_path_for(config_path or C.user_config_path()),
                                          progress=lambda d, n: state.update(done=d, total=n))
-        shapes, per_template = T.gather(all_templates, list(folders), expand, read)
+        try:
+            shapes, per_template = T.gather(all_templates, list(folders), expand, read)
+        except Exception as e:                             # say so, instead of a progress line forever
+            log.exception("template window: reading shapes failed")
+            state["error"] = f"Couldn't read the video shapes: {e}"
+            return
         state["per_template"] = per_template
         state["shapes"] = shapes
 
     def poll():
+        if state.get("error"):
+            status.config(text=state["error"][:90])
+            return
         if state["shapes"] is not None:
             build()
             return

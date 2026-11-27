@@ -12,6 +12,7 @@ from ctypes import wintypes
 RAM_PER_VIDEO_MB = 220
 RAM_RESERVE_MB = 768          # leave this much RAM free for Windows and everything else
 VRAM_SHARE = 0.8              # use at most this share of the graphics card's memory
+INTEGRATED_BELOW_MB = 2048    # less "dedicated" memory than this: integrated graphics, no card limit
 
 
 def video_cost_mb(w: int = 1920, h: int = 1080) -> float:
@@ -42,6 +43,11 @@ def gpu_memory_mb() -> int | None:
                     continue
     except OSError:
         return None
+    if best is not None and best < INTEGRATED_BELOW_MB:
+        # Integrated graphics (Intel, AMD APUs) report only a small reserved slice here (often 128-512 MB)
+        # and really draw on system RAM, which the RAM check covers. As a card limit it would refuse the
+        # very first video.
+        return None
     return best
 
 
@@ -58,7 +64,10 @@ def free_ram_mb() -> int:
 
 
 def room_for_one_more(costs_mb: list[float], vram_mb: int | None, ram_free_mb: int) -> tuple[bool, str]:
-    """Can another (1080p-sized, until known) video be opened next to videos costing `costs_mb`?"""
+    """Can another (1080p-sized, until known) video be opened next to videos costing `costs_mb`?
+    The first video is always allowed: refusing it would only leave an empty wall."""
+    if not costs_mb:
+        return True, ""
     need = sum(costs_mb) + video_cost_mb()
     if vram_mb and need > vram_mb * VRAM_SHARE:
         return False, f"not enough video memory (about {need:.0f} of {vram_mb} MB needed)"

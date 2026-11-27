@@ -180,7 +180,8 @@ def load(source: str, limit: int = POOL_LIMIT, max_age: float = MAX_AGE) -> list
     target = f"ytsearch{limit}:{q}" if q else source
     t = time.monotonic()
     code, out = ytdlp.run([exe, "--flat-playlist", "--no-warnings", "--playlist-items", f"1:{limit}",
-                           "--print", LISTING, "--print", "playlist:" + TITLE_LINE + "%(title)s", target], 180)
+                           "--print", LISTING, "--print", "playlist:" + TITLE_LINE + "%(title)s", "--", target],
+                          180)
     entries = parse_listing(out)
     title = next((l[len(TITLE_LINE):].strip() for l in out.splitlines() if l.startswith(TITLE_LINE)), "")
     log.info("source %s: %d videos listed in %.1f s (yt-dlp exit %s)", source, len(entries),

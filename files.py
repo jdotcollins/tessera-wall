@@ -74,13 +74,18 @@ def write_state(config_path: str, **values) -> None:
         log.info("could not save %s: %s", path, e)
 
 
+WINDOWS_RESERVED = {"CON", "PRN", "AUX", "NUL"} | {f"COM{i}" for i in range(1, 10)} | {f"LPT{i}" for i in range(1, 10)}
+
+
 def walls_dir(config_path: str) -> str:
     """Saved walls live next to the settings file, so tests (with their own --config) stay separate."""
     return os.path.join(os.path.dirname(os.path.abspath(config_path)), "walls")
 
 
 def save_wall(config_path: str, name: str, items: list) -> str:
-    safe = "".join(ch if ch.isalnum() or ch in " -_." else "_" for ch in name).strip()[:60] or "wall"
+    safe = "".join(ch if ch.isalnum() or ch in " -_." else "_" for ch in name).strip(" .")[:60] or "wall"
+    if safe.split(".")[0].upper() in WINDOWS_RESERVED:    # "CON", "nul.json"...: devices, not files
+        safe = "_" + safe
     folder = walls_dir(config_path)
     os.makedirs(folder, exist_ok=True)
     path = os.path.join(folder, safe + ".json")

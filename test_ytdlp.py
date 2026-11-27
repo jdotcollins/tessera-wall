@@ -83,6 +83,54 @@ class FakeYtdlp:
         C.app_dir, C.UPDATE_CHECK, C.YTDLP_PATH, Y.run, Y._state_dir = self.saved
 
 
+def mpv_split_options(s: str) -> dict:
+    """Split a loadfile options string the way mpv does: key=value pairs separated by commas, where a
+    value written %n%... is exactly n BYTES of UTF-8 long and may hold commas and '='."""
+    b, out, i = s.encode("utf-8"), {}, 0
+    while i < len(b):
+        eq = b.index(b"=", i)
+        key = b[i:eq].decode()
+        i = eq + 1
+        if b[i:i + 1] == b"%":
+            end = b.index(b"%", i + 1)
+            n = int(b[i + 1:end])
+            value, i = b[end + 1:end + 1 + n], end + 1 + n
+        else:
+            end = b.find(b",", i)
+            end = len(b) if end < 0 else end
+            value, i = b[i:end], end
+        out[key] = value.decode("utf-8")
+        if b[i:i + 1] == b",":
+            i += 1
+    return out
+
+
+def test_loadfile_options_quote_by_bytes():
+    # A title the uploader chose: non-ASCII, with what looks like more options at its end. mpv must see it
+    # as one title, not as a title plus "volume" and "script-opts".
+    title = "Café ☕ 東京,volume=17,script-opts=ytdl_hook-ytdl_path=C:\\x\\h.bat"
+    r = {"urls": ["https://v.example/video", "https://v.example/audio,x=1"], "user_agent": "Mözilla/5.0",
+         "chunk": 10485760, "title": title}
+    got = mpv_split_options(Y.loadfile_options(r))
+    assert got == {"audio-files-append": "https://v.example/audio,x=1", "user-agent": "Mözilla/5.0",
+                   "curl-max-request-size": "10485760", "force-media-title": title}, got
+
+
+def test_run_ends_a_hung_tree_on_time():
+    # Like the one-file yt-dlp.exe: a launcher whose child (holding the output pipes) hangs.
+    import subprocess
+    import sys
+    hang = ("import subprocess, sys, time; "
+            "subprocess.Popen([sys.executable, '-c', 'import time; time.sleep(60)']); time.sleep(60)")
+    start = time.monotonic()
+    code, out = Y.run([sys.executable, "-c", hang], 2)
+    took = time.monotonic() - start
+    assert code == -1 and "did not finish" in out, (code, out)
+    assert took < 8, f"run() took {took:.1f} s for a 2 s timeout"
+    ok, quick = Y.run([sys.executable, "-c", "print('hello')"], 10)
+    assert ok == 0 and quick.strip() == "hello", (ok, quick)
+
+
 def test_warm_hosts():
     """Which HTTPS hosts get a Windows-checked handshake before a link plays (fresh-PC root certificates)."""
     assert Y.warm_hosts("https://www.youtube.com/watch?v=x") == ["www.youtube.com", "redirector.googlevideo.com"]

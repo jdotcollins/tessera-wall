@@ -60,6 +60,7 @@ class MpvIpc:
         self._events: dict[str, tuple[int, int]] = {}      # event name -> (how many, seq of the last)
         self._observe_ids = itertools.count(1)
         self.dropped = 0                                    # posts thrown away because mpv stopped reading
+        self.bad_lines = 0                                  # lines from mpv that were not JSON objects
         self.alive = True
         threading.Thread(target=self._reader, daemon=True).start()
         threading.Thread(target=self._writer, daemon=True).start()
@@ -89,7 +90,16 @@ class MpvIpc:
                     line, buf = buf.split(b"\n", 1)
                     if not line.strip():
                         continue
-                    msg = json.loads(line)
+                    try:
+                        # mpv passes strings from file tags through as they are, so a title need not be
+                        # valid UTF-8; one bad line must not end the connection.
+                        msg = json.loads(line.decode("utf-8", "replace"))
+                    except ValueError:
+                        self.bad_lines += 1
+                        continue
+                    if not isinstance(msg, dict):
+                        self.bad_lines += 1
+                        continue
                     self._seq += 1
                     event = msg.get("event")
                     if event == "property-change":
@@ -102,7 +112,9 @@ class MpvIpc:
                         if entry:
                             entry[1].append(msg)
                             entry[0].set()
-        except (EOFError, OSError, ValueError):
+        except Exception:
+            # EOFError / OSError: mpv closed the pipe. RuntimeError: close() cancelled a pending overlapped
+            # read, which PipeConnection reports as "shouldn't get here". Either way the connection is over.
             pass
         self.alive = False
         for ev, _ in list(self._pending.values()):

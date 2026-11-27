@@ -255,13 +255,28 @@ folder on the development PC still has the old name; nothing depends on it.
 - Crash restart: a player that exits with a non-zero code after it had shown video is restarted into
   the same frame at its last pushed `time-pos` (`Wall.restart`, `Wall.spawn`), at most 3 times a minute
   per tile, then the tile is removed as before. A player closed by the user exits with 0 and is removed.
+  A restart resets `swap_seq` (the new connection numbers its messages from 0; until 0.14 an old, higher
+  `swap_seq` could hide the restarted video's end from Move on).
+- Robustness added from the 0.15 audit (`reports/` is not in git): `MpvIpc._reader` skips a line that is
+  not JSON (decoded with `errors="replace"`, since mpv passes file tags through unchecked) instead of
+  ending the connection, and counts it in `bad_lines`. A player whose connection ended while mpv runs on
+  is ended after `LOST_PLAYER_S` and comes back through the crash restart. A swap bumps `prepare_id`, so a
+  look-ahead still queued for the old video is skipped. A failed Ctrl+S save says so on a tile instead of
+  closing the wall (the callback-error handler quits). `quit` asks every player at once and waits on one
+  1.5 s deadline. The start window's and template window's shape workers report an error instead of
+  hanging, `probe.py` removes its temp folder, and `threading.excepthook` logs any worker crash (pythonw
+  has no stderr). A session or saved-wall `pool` that is not a canonical source is dropped, and yt-dlp's
+  listing gets `--` before the target.
 - Memory guard (`resources.py`): before each `Wall.add`, the estimated graphics memory of the open
   videos plus one more 1080p video (60 MB + 110 MB per 1080p of picture, from measurements of 6 x
   1080p60) must fit in 80% of the largest card's dedicated memory (registry
   `HardwareInformation.qwMemorySize`, 64-bit, unlike WMI's `AdapterRAM`), and 220 MB more RAM must
   leave 768 MB free. Refused videos are collected in `Wall.refused` and reported once on screen by
-  `report_refused`. These are estimates, not measurements of the running players; integrated GPUs
-  report small dedicated memory and may be refused early. `TESSERAWALL_VRAM_MB` overrides the reading
+  `report_refused`. These are estimates, not measurements of the running players. Integrated GPUs
+  report only a small reserved slice (often 128-512 MB) and draw on system RAM, so a largest reading under
+  2 GB (`INTEGRATED_BELOW_MB`) sets no card limit and only the RAM check applies; before 0.15 such a PC
+  would have refused even the first video. The first video is always allowed (`room_for_one_more`).
+  `test_resources.py` covers both. `TESSERAWALL_VRAM_MB` overrides the reading
   (tests). `MAX_VIDEOS` is 24.
 - Sync (`G`, `Wall.toggle_sync`): seeks every video to the focused one and copies its pause and speed;
   while on, `Wall.cmd` sends speed and frame-step commands to all, `Space` sets one pause state on all,
@@ -427,7 +442,10 @@ folder on the development PC still has the old name; nothing depends on it.
   successor as soon as it plays and resolves it in a worker (`ytdlp.resolve`: yt-dlp -j with the player's
   format; two at a time, `prepare_slots`); `advance`, `timed_switch` and N take it (`take_ready`, only if
   picked the same way and not on the wall meanwhile) and `load_into` opens the streams directly with
-  `ytdlp.loadfile_options`: the audio as `audio-files-append`, the title as `force-media-title`, and, as
+  `ytdlp.loadfile_options` (each value quoted `%n%value`, n in UTF-8 BYTES: counting characters, as until
+  0.14, made mpv reject every prepared swap with a non-ASCII title and let a crafted title add options of
+  its own, including one that runs a program; `test_loadfile_options_quote_by_bytes`): the audio as
+  `audio-files-append`, the title as `force-media-title`, and, as
   the hook does, yt-dlp's User-Agent and `curl-max-request-size` (YouTube answers 403 to requests over
   ~10 MiB or with another User-Agent). Measured: picture in ~0.4 s. The tile keeps the page link as its
   path. A switch to a link sets brightness -100 (`fade = "hold"`) so the last frame never lingers;
@@ -519,7 +537,6 @@ bundled pin), Python 3.13, one 2560x1440 monitor at 100% scaling, AMD GPU with H
 
 - Any other machine: other GPUs, Windows 10, other DPI scaling, HDR off, more than one monitor.
 - Ordinary compressed files in everyday use beyond one manual session; the tests use generated clips.
-- Mouse wheel, `Up` (volume), `x` / `Delete` / middle-click, `0`, dragging along the seek bar.
 - The memory guard against a card actually running out of memory; only its estimate and a pretend
   700 MB card were tested.
 - Templates on rotated phone videos: `demux-rotation` is read but no rotated test file could be made
@@ -543,7 +560,11 @@ python test_templates.py
 python test_ytdlp.py
 python test_sources.py
 python test_jobs.py           # Windows: players end with a killed app
+python test_files.py          # folders, subfolders, saved walls, state.json
+python test_resources.py      # memory guard
 python tests/smoke.py           # every test below takes over the screen, mouse and often keyboard
+python tests/controls2_test.py  # wheel, Up / Down, seek-bar drag, 0, X / Delete / middle-click (no pixels)
+python tests/soak_test.py       # HOURS (default 240 min): memory, handles, GDI and players over a long run
 python tests/freeze_test.py     # a suspended player must not stall the wall
 python tests/phase2_test.py     # speed, frame step, A-B loop, tracks, snapshot, crash restart
 python tests/phase3_test.py     # memory guard, Tab focus, sync, Ctrl+S save, saved-wall button
@@ -584,10 +605,12 @@ python tests/stress_test.py     # GPU driver-timeout check
 
 Notes for anyone running or writing them:
 
-- They need a real desktop, a GPU and mpv, so they cannot run in ordinary CI. The four unit-test
-  files (`test_layout.py`, `test_config.py`, `test_updates.py`, `test_templates.py`) run on GitHub
-  Actions on every push
-  (`.github/workflows/unit-tests.yml`, Windows, Python 3.11 and 3.13).
+- They need a real desktop, a GPU and mpv, so they cannot run in ordinary CI. Every unit-test file
+  (`test_*.py` at the top level) runs on GitHub Actions on every push
+  (`.github/workflows/unit-tests.yml`, Windows, Python 3.11 and 3.13); a new one needs a step there.
+- Tests that read screen pixels (`controls_test`, `magnify_test`, `clean_test`) need the monitor on: on
+  the development PC, GDI capture saw no Compatibility-mode video while the monitor was off (2026-11-26).
+  Newer tests read the players' state over IPC or the window tree instead.
 - They move the real pointer. A person using the mouse during a run, or a driver popup appearing over
   the wall, makes them fail. Re-run a failing test alone and read `%TEMP%\tesserawall.log` before
   suspecting the app.
@@ -633,8 +656,11 @@ Notes for anyone running or writing them:
   players and `probe.py`'s shape readers) in one job object with "kill on job close", whose only handle
   the app holds, so a crash or a kill ends them too, with whatever they started (yt-dlp, Deno). Before
   this (until 0.12.3) a killed wall left its players running, muted and windowless. The app itself is
-  not in the job, so what it opens on purpose (browser, editor, a new instance) outlives it. yt-dlp
-  runs the app starts itself (listing, updates) are not in it; they end on their own. `test_jobs.py`
+  not in the job, so what it opens on purpose (browser, editor, a new instance) outlives it. Since 0.15
+  the yt-dlp runs the app starts itself (listing, look-ahead, updates; `ytdlp.run`) are in it too, and a
+  run past its timeout is ended with its whole tree (`ytdlp.kill_tree`): `subprocess.run(timeout=)` killed
+  only the one-file exe's launcher and then waited for the real yt-dlp to let go of the pipes, so a hung
+  lookup could hold a look-ahead slot or the update lock for the rest of the session. `test_jobs.py`
   checks the job with stand-in processes (and a control without it), `tests/kill_test.py` with a real
   wall. `smoke.py` fails while any mpv is left over; end leftovers by PID, never by name.
 - One unexplained event: `features_test.py` once failed "r should restart every video" and passed on

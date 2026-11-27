@@ -117,6 +117,9 @@ def main():
     logging.basicConfig(filename=C.LOG_PATH or os.path.join(tempfile.gettempdir(), "tesserawall.log"),
                         filemode="w", level=logging.INFO, format="%(asctime)s.%(msecs)03d %(message)s",
                         datefmt="%H:%M:%S", force=True)
+    # Under pythonw there is no stderr, so an exception in a worker thread would vanish without a trace.
+    threading.excepthook = lambda a: log.error("thread %s failed", a.thread.name if a.thread else "?",
+                                               exc_info=(a.exc_type, a.exc_value, a.exc_traceback))
     log.info("settings file: %s", config_path)
     for p in problems:
         log.warning("config: %s", p)

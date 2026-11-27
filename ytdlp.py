@@ -242,13 +242,41 @@ def links_from_text(text: str) -> list[str]:
 
 # ---- keeping Tessera Wall's own copy current ----------------------------------------------------------
 def run(args: list[str], timeout: float, env: dict | None = None) -> tuple[int, str]:
-    """(exit code, output) of a yt-dlp command; (-1, reason) if it could not run. Replaced in tests."""
+    """(exit code, output) of a yt-dlp command; (-1, reason) if it could not run. Replaced in tests.
+
+    Not subprocess.run(timeout=...): the shipped yt-dlp.exe is a one-file build whose launcher starts the
+    real yt-dlp (and that starts Deno), and run() on Windows kills only the launcher, then waits for the
+    others to let go of the output pipes, which a hung lookup never does. So the whole tree is ended. The
+    processes are also put in the app's job, so they end with the app (winapi.end_with_app)."""
     try:
-        done = subprocess.run(args, capture_output=True, text=True, encoding="utf-8", errors="replace",
-                              timeout=timeout, creationflags=subprocess.CREATE_NO_WINDOW, env=env)
-        return done.returncode, (done.stdout or "") + (done.stderr or "")
-    except (OSError, subprocess.TimeoutExpired) as e:
+        p = subprocess.Popen(args, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True, encoding="utf-8",
+                             errors="replace", creationflags=subprocess.CREATE_NO_WINDOW, env=env)
+    except OSError as e:
         return -1, str(e)
+    try:
+        from winapi import end_with_app
+        end_with_app(p.pid)
+    except Exception:                                    # not Windows, or the job could not be made
+        pass
+    try:
+        out, err = p.communicate(timeout=timeout)
+        return p.returncode, (out or "") + (err or "")
+    except subprocess.TimeoutExpired:
+        kill_tree(p.pid)
+        try:
+            p.communicate(timeout=5)
+        except subprocess.TimeoutExpired:                # something still holds the pipes: give up on them
+            p.kill()
+        return -1, f"yt-dlp did not finish within {timeout:g} s"
+
+
+def kill_tree(pid: int):
+    """End a process and every process it started (taskkill /T walks the parent links)."""
+    try:
+        subprocess.run(["taskkill", "/T", "/F", "/PID", str(pid)], capture_output=True, timeout=15,
+                       creationflags=subprocess.CREATE_NO_WINDOW)
+    except (OSError, subprocess.TimeoutExpired):
+        pass
 
 
 def resolve(link: str, height: int | None = None, exe: str | None = None) -> dict | None:
@@ -279,8 +307,10 @@ def resolve(link: str, height: int | None = None, exe: str | None = None) -> dic
 
 
 def loadfile_options(r: dict) -> str:
-    """mpv loadfile per-file options for a resolve() result (each value length-quoted: %n%...)."""
-    q = lambda v: f"%{len(v)}%{v}"
+    """mpv loadfile per-file options for a resolve() result (each value length-quoted: %n%...).
+    mpv counts n in UTF-8 BYTES. Counting characters would let the end of a non-ASCII title (which the
+    video's uploader chooses) be read as further options, e.g. one that makes mpv run a program."""
+    q = lambda v: f"%{len(v.encode('utf-8'))}%{v}"
     opts = []
     if len(r["urls"]) > 1:
         opts.append("audio-files-append=" + q(r["urls"][1]))
